@@ -1,0 +1,6 @@
+[workspace]
+members = ["ultrahdr-sys", "ultrahdr"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"

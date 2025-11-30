@@ -1,0 +1,19 @@
+[package]
+name = "ultrahdr"
+version = "0.1.0"
+edition = "2021"
+description = "Safe-ish Rust wrapper around libultrahdr"
+license = "Apache-2.0"
+
+[features]
+default = ["vendored"]
+vendored = ["ultrahdr-sys/vendored"]
+shared = ["ultrahdr-sys/shared"]
+gles = ["ultrahdr-sys/gles"]
+
+[dependencies]
+ultrahdr-sys = { path = "../ultrahdr-sys" }
+
+[dev-dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }

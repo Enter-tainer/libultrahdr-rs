@@ -1,0 +1,3 @@
+[submodule "libultrahdr"]
+	path = libultrahdr
+	url = ../libultrahdr
