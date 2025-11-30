@@ -43,11 +43,19 @@ fn main() {
         .define("UHDR_ENABLE_INSTALL", "OFF")
         .define(
             "UHDR_BUILD_DEPS",
-            if cfg!(feature = "vendored") { "ON" } else { "OFF" },
+            if cfg!(feature = "vendored") {
+                "ON"
+            } else {
+                "OFF"
+            },
         )
         .define(
             "BUILD_SHARED_LIBS",
-            if cfg!(feature = "shared") { "ON" } else { "OFF" },
+            if cfg!(feature = "shared") {
+                "ON"
+            } else {
+                "OFF"
+            },
         );
 
     if cfg!(feature = "gles") {
@@ -85,12 +93,19 @@ fn main() {
     let link_kind = if shared { "dylib" } else { "static" };
     println!("cargo:rustc-link-lib={}={}", link_kind, link_name);
     if target_env != "msvc" {
-        let cxx_stdlib = if target_os == "macos" { "c++" } else { "stdc++" };
+        let cxx_stdlib = if target_os == "macos" {
+            "c++"
+        } else {
+            "stdc++"
+        };
         println!("cargo:rustc-link-lib={}", cxx_stdlib);
     }
 
     // Re-run if the public header changes.
-    println!("cargo:rerun-if-changed={}", src_dir.join("ultrahdr_api.h").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        src_dir.join("ultrahdr_api.h").display()
+    );
 
     let bindings = bindgen::Builder::default()
         .header(src_dir.join("ultrahdr_api.h").to_string_lossy())

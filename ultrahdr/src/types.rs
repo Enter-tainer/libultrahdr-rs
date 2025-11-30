@@ -52,7 +52,12 @@ impl<'a> EncodedView<'a> {
     pub fn to_owned(&self) -> Result<EncodedImage> {
         let data = copy_compressed_image(self.inner)?;
         let (cg, ct, range) = self.meta();
-        Ok(EncodedImage { data, cg, ct, range })
+        Ok(EncodedImage {
+            data,
+            cg,
+            ct,
+            range,
+        })
     }
 }
 
@@ -252,7 +257,9 @@ impl<'a> RawImage<'a> {
         let bytes_per_pixel = bytes_per_pixel(fmt)?;
         let expected = width as usize * height as usize * bytes_per_pixel;
         if data.len() < expected {
-            return Err(Error::invalid_param("buffer smaller than width*height*bytes_per_pixel"));
+            return Err(Error::invalid_param(
+                "buffer smaller than width*height*bytes_per_pixel",
+            ));
         }
         let mut planes = [ptr::null_mut(); 3];
         planes[0] = data.as_mut_ptr() as *mut c_void;
@@ -345,9 +352,7 @@ impl<'a> CompressedImage<'a> {
 }
 
 /// Copy a packed raw image plane into an owned Vec<u8>, honoring stride.
-pub(crate) fn copy_raw_packed(
-    img: &sys::uhdr_raw_image,
-) -> Result<Vec<u8>> {
+pub(crate) fn copy_raw_packed(img: &sys::uhdr_raw_image) -> Result<Vec<u8>> {
     let bytes_per_pixel = bytes_per_pixel(img.fmt)?;
     let plane_idx = sys::UHDR_PLANE_PACKED as usize;
     let data_ptr = img.planes[plane_idx];
@@ -482,7 +487,11 @@ mod tests {
         let height = 2u32;
         let bpp = 4usize;
         let mut buf = vec![0u8; (width * height) as usize * bpp];
-        let planes = [buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut()];
+        let planes = [
+            buf.as_mut_ptr() as *mut c_void,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ];
         let mut raw = sys::uhdr_raw_image {
             fmt: sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
             cg: sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
@@ -512,7 +521,11 @@ mod tests {
         let row2_start = stride_px * bpp;
         buf[row2_start..row2_start + 8].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
 
-        let planes = [buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut()];
+        let planes = [
+            buf.as_mut_ptr() as *mut c_void,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ];
         let mut raw = sys::uhdr_raw_image {
             fmt: sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
             cg: sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,

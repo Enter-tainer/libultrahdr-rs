@@ -45,8 +45,14 @@ pub(crate) fn check(info: sys::uhdr_error_info_t) -> Result<()> {
     }
     let detail = if info.has_detail != 0 && info.detail[0] != 0 {
         // SAFETY: detail is a char buffer owned by the struct and expected to be null-terminated.
-        let s = unsafe { CStr::from_ptr(info.detail.as_ptr()) }.to_string_lossy().into_owned();
-        if s.is_empty() { None } else { Some(s) }
+        let s = unsafe { CStr::from_ptr(info.detail.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     } else {
         None
     };

@@ -19,7 +19,8 @@ impl Encoder {
     }
 
     pub fn set_raw_image(&mut self, img: &mut RawImage<'_>, intent: ImgLabel) -> Result<()> {
-        let err = unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), img.as_mut_ptr(), intent) };
+        let err =
+            unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), img.as_mut_ptr(), intent) };
         check(err)
     }
 
@@ -28,7 +29,8 @@ impl Encoder {
         img: &mut DecodedPackedView<'_>,
         intent: ImgLabel,
     ) -> Result<()> {
-        let err = unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), img.as_raw_mut(), intent) };
+        let err =
+            unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), img.as_raw_mut(), intent) };
         check(err)
     }
 
@@ -37,7 +39,8 @@ impl Encoder {
         img: &mut OwnedPackedImage,
         intent: ImgLabel,
     ) -> Result<()> {
-        let err = unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), img.as_raw_mut(), intent) };
+        let err =
+            unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), img.as_raw_mut(), intent) };
         check(err)
     }
 
@@ -46,8 +49,9 @@ impl Encoder {
         img: &mut CompressedImage<'_>,
         intent: ImgLabel,
     ) -> Result<()> {
-        let err =
-            unsafe { sys::uhdr_enc_set_compressed_image(self.raw.as_ptr(), img.as_mut_ptr(), intent) };
+        let err = unsafe {
+            sys::uhdr_enc_set_compressed_image(self.raw.as_ptr(), img.as_mut_ptr(), intent)
+        };
         check(err)
     }
 
@@ -62,8 +66,9 @@ impl Encoder {
     }
 
     pub fn set_using_multi_channel_gainmap(&mut self, enable: bool) -> Result<()> {
-        let err =
-            unsafe { sys::uhdr_enc_set_using_multi_channel_gainmap(self.raw.as_ptr(), enable as i32) };
+        let err = unsafe {
+            sys::uhdr_enc_set_using_multi_channel_gainmap(self.raw.as_ptr(), enable as i32)
+        };
         check(err)
     }
 

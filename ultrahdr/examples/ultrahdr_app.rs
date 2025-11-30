@@ -112,7 +112,9 @@ fn main() -> Result<()> {
             gm_q,
             scale,
             mc,
-        } => encode(hdr_raw, hdr_fmt, sdr_jpeg, out, width, height, base_q, gm_q, scale, mc),
+        } => encode(
+            hdr_raw, hdr_fmt, sdr_jpeg, out, width, height, base_q, gm_q, scale, mc,
+        ),
         Command::Decode {
             uhdr,
             out_raw,
@@ -199,8 +201,8 @@ fn decode(
 
     let img_fmt = fmt.to_img_fmt();
     let decoded = dec.decode_packed_view(img_fmt, transfer.to_ct())?;
-    let mut file =
-        File::create(&out_raw_path).with_context(|| format!("Failed to write {}", out_raw_path.display()))?;
+    let mut file = File::create(&out_raw_path)
+        .with_context(|| format!("Failed to write {}", out_raw_path.display()))?;
     for y in 0..decoded.height() as usize {
         let row = decoded.row(y)?;
         file.write_all(row)
