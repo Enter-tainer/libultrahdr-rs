@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs::{self, File};
 use std::io::Write;
@@ -64,6 +64,20 @@ enum Command {
     },
 }
 
+#[derive(Debug)]
+struct EncodeArgs {
+    hdr_raw: PathBuf,
+    hdr_fmt: RawFmt,
+    sdr_jpeg: PathBuf,
+    out: PathBuf,
+    width: u32,
+    height: u32,
+    base_q: i32,
+    gm_q: i32,
+    scale: i32,
+    mc: bool,
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 enum RawFmt {
     Rgba8888,
@@ -112,9 +126,18 @@ fn main() -> Result<()> {
             gm_q,
             scale,
             mc,
-        } => encode(
-            hdr_raw, hdr_fmt, sdr_jpeg, out, width, height, base_q, gm_q, scale, mc,
-        ),
+        } => encode(EncodeArgs {
+            hdr_raw,
+            hdr_fmt,
+            sdr_jpeg,
+            out,
+            width,
+            height,
+            base_q,
+            gm_q,
+            scale,
+            mc,
+        }),
         Command::Decode {
             uhdr,
             out_raw,
@@ -124,18 +147,20 @@ fn main() -> Result<()> {
     }
 }
 
-fn encode(
-    hdr_raw_path: PathBuf,
-    hdr_fmt: RawFmt,
-    sdr_jpeg_path: PathBuf,
-    out_path: PathBuf,
-    width: u32,
-    height: u32,
-    base_q: i32,
-    gm_q: i32,
-    scale: i32,
-    mc: bool,
-) -> Result<()> {
+fn encode(args: EncodeArgs) -> Result<()> {
+    let EncodeArgs {
+        hdr_raw: hdr_raw_path,
+        hdr_fmt,
+        sdr_jpeg: sdr_jpeg_path,
+        out: out_path,
+        width,
+        height,
+        base_q,
+        gm_q,
+        scale,
+        mc,
+    } = args;
+
     let mut hdr_bytes = fs::read(&hdr_raw_path)
         .with_context(|| format!("Failed to read HDR raw {}", hdr_raw_path.display()))?;
     let mut sdr_bytes = fs::read(&sdr_jpeg_path)
