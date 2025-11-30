@@ -1,8 +1,6 @@
 use crate::error::{check, Error, Result};
 use crate::sys;
-use crate::types::{
-    bytes_per_pixel, ColorTransfer, CompressedImage, DecodedPackedView, ImgFormat,
-};
+use crate::types::{ColorTransfer, CompressedImage, DecodedPackedView, ImgFormat};
 use std::ptr::NonNull;
 
 pub struct Decoder {
@@ -58,8 +56,7 @@ impl Decoder {
         let raw = self
             .decoded_image()
             .ok_or_else(|| Error::invalid_param("decoded image is null"))?;
-        let bpp = bytes_per_pixel(fmt)?;
-        Ok(DecodedPackedView::new(raw, bpp))
+        DecodedPackedView::new(raw)
     }
 
     /// Borrow the decoded image owned by the decoder; remains valid until decoder is dropped/reset.

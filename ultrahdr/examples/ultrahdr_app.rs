@@ -72,11 +72,11 @@ enum RawFmt {
 }
 
 impl RawFmt {
-    fn to_img_fmt(&self) -> (ImgFormat, usize) {
+    fn to_img_fmt(&self) -> ImgFormat {
         match self {
-            RawFmt::Rgba8888 => (sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888, 4),
-            RawFmt::Rgba1010102 => (sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102, 4),
-            RawFmt::RgbaF16 => (sys::uhdr_img_fmt::UHDR_IMG_FMT_64bppRGBAHalfFloat, 8),
+            RawFmt::Rgba8888 => sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
+            RawFmt::Rgba1010102 => sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
+            RawFmt::RgbaF16 => sys::uhdr_img_fmt::UHDR_IMG_FMT_64bppRGBAHalfFloat,
         }
     }
 }
@@ -139,12 +139,11 @@ fn encode(
     let mut sdr_bytes = fs::read(&sdr_jpeg_path)
         .with_context(|| format!("Failed to read SDR JPEG {}", sdr_jpeg_path.display()))?;
 
-    let (fmt, bpp) = hdr_fmt.to_img_fmt();
+    let fmt = hdr_fmt.to_img_fmt();
     let mut hdr_raw = RawImage::packed(
         fmt,
         width,
         height,
-        bpp,
         &mut hdr_bytes,
         sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
         sys::uhdr_color_transfer::UHDR_CT_PQ,
@@ -198,7 +197,7 @@ fn decode(
     );
     dec.set_image(&mut comp)?;
 
-    let (img_fmt, _) = fmt.to_img_fmt();
+    let img_fmt = fmt.to_img_fmt();
     let decoded = dec.decode_packed_view(img_fmt, transfer.to_ct())?;
     let mut file =
         File::create(&out_raw_path).with_context(|| format!("Failed to write {}", out_raw_path.display()))?;

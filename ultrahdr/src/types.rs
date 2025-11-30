@@ -68,17 +68,11 @@ pub struct DecodedPacked {
 }
 
 impl DecodedPacked {
-    fn bytes_per_pixel(&self) -> Result<usize> {
-        bytes_per_pixel(self.fmt)
-    }
-
     pub fn as_raw_image(&mut self) -> Result<RawImage<'_>> {
-        let bpp = self.bytes_per_pixel()?;
         RawImage::packed(
             self.fmt,
             self.width,
             self.height,
-            bpp,
             &mut self.data,
             self.cg,
             self.ct,
@@ -159,8 +153,9 @@ pub struct DecodedPackedView<'a> {
 }
 
 impl<'a> DecodedPackedView<'a> {
-    pub(crate) fn new(img: &'a mut sys::uhdr_raw_image, bpp: usize) -> Self {
-        Self { img, bpp }
+    pub(crate) fn new(img: &'a mut sys::uhdr_raw_image) -> Result<Self> {
+        let bpp = bytes_per_pixel(img.fmt)?;
+        Ok(Self { img, bpp })
     }
 
     pub fn width(&self) -> u32 {
@@ -224,7 +219,7 @@ impl<'a> DecodedPackedView<'a> {
 
     pub fn to_owned(&self) -> Result<DecodedPacked> {
         let img: &sys::uhdr_raw_image = &*self.img;
-        let data = copy_raw_packed(img, self.bpp)?;
+        let data = copy_raw_packed(img)?;
         let (cg, ct, range) = self.meta();
         Ok(DecodedPacked {
             fmt: img.fmt,
@@ -249,12 +244,12 @@ impl<'a> RawImage<'a> {
         fmt: sys::uhdr_img_fmt,
         width: u32,
         height: u32,
-        bytes_per_pixel: usize,
         data: &'a mut [u8],
         cg: ColorGamut,
         ct: ColorTransfer,
         range: ColorRange,
     ) -> Result<Self> {
+        let bytes_per_pixel = bytes_per_pixel(fmt)?;
         let expected = width as usize * height as usize * bytes_per_pixel;
         if data.len() < expected {
             return Err(Error::invalid_param("buffer smaller than width*height*bytes_per_pixel"));
@@ -289,7 +284,6 @@ impl<'a> RawImage<'a> {
             sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
             width,
             height,
-            4,
             data,
             cg,
             ct,
@@ -353,8 +347,8 @@ impl<'a> CompressedImage<'a> {
 /// Copy a packed raw image plane into an owned Vec<u8>, honoring stride.
 pub(crate) fn copy_raw_packed(
     img: &sys::uhdr_raw_image,
-    bytes_per_pixel: usize,
 ) -> Result<Vec<u8>> {
+    let bytes_per_pixel = bytes_per_pixel(img.fmt)?;
     let plane_idx = sys::UHDR_PLANE_PACKED as usize;
     let data_ptr = img.planes[plane_idx];
     if data_ptr.is_null() {
@@ -410,5 +404,143 @@ pub fn bytes_per_pixel(fmt: ImgFormat) -> Result<usize> {
         sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102 => Ok(4),
         sys::uhdr_img_fmt::UHDR_IMG_FMT_64bppRGBAHalfFloat => Ok(8),
         _ => Err(Error::invalid_param("unsupported packed format for helper")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_image_rgba_checks_buffer_size() {
+        let mut buf = vec![0u8; 3];
+        let res = RawImage::rgba8888(
+            1,
+            1,
+            &mut buf,
+            sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
+            sys::uhdr_color_transfer::UHDR_CT_SRGB,
+            sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+        );
+        let err = res.err().expect("expected buffer size validation to fail");
+        assert_eq!(err.code, sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM);
+    }
+
+    #[test]
+    fn encoded_view_validates_backing_buffer() {
+        // Null data pointer should be rejected.
+        let img = sys::uhdr_compressed_image {
+            data: std::ptr::null_mut(),
+            data_sz: 4,
+            capacity: 4,
+            cg: sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
+            ct: sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
+            range: sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+        };
+        let view = EncodedView::new(&img);
+        let err = view.bytes().unwrap_err();
+        assert_eq!(err.code, sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM);
+
+        // data_sz larger than capacity should be rejected.
+        let mut data = vec![1u8, 2, 3, 4];
+        let img = sys::uhdr_compressed_image {
+            data: data.as_mut_ptr() as *mut c_void,
+            data_sz: 5,
+            capacity: 4,
+            cg: sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
+            ct: sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
+            range: sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+        };
+        let view = EncodedView::new(&img);
+        let err = view.bytes().unwrap_err();
+        assert_eq!(err.code, sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM);
+    }
+
+    #[test]
+    fn encoded_view_reads_slice() {
+        let mut data = vec![1u8, 2, 3, 4];
+        let img = sys::uhdr_compressed_image {
+            data: data.as_mut_ptr() as *mut c_void,
+            data_sz: data.len(),
+            capacity: data.len(),
+            cg: sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
+            ct: sys::uhdr_color_transfer::UHDR_CT_PQ,
+            range: sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+        };
+        let view = EncodedView::new(&img);
+        let bytes = view.bytes().unwrap();
+        assert_eq!(bytes, &[1, 2, 3, 4]);
+        let (cg, ct, range) = view.meta();
+        assert_eq!(cg, sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3);
+        assert_eq!(ct, sys::uhdr_color_transfer::UHDR_CT_PQ);
+        assert_eq!(range, sys::uhdr_color_range::UHDR_CR_FULL_RANGE);
+    }
+
+    #[test]
+    fn decoded_view_row_checks_bounds_and_stride() {
+        let width = 2u32;
+        let height = 2u32;
+        let bpp = 4usize;
+        let mut buf = vec![0u8; (width * height) as usize * bpp];
+        let planes = [buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut()];
+        let mut raw = sys::uhdr_raw_image {
+            fmt: sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
+            cg: sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
+            ct: sys::uhdr_color_transfer::UHDR_CT_PQ,
+            range: sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w: width,
+            h: height,
+            planes,
+            stride: [1, 0, 0], // stride smaller than width triggers validation.
+        };
+        let view = DecodedPackedView::new(&mut raw).unwrap();
+        let err = view.row(0).unwrap_err();
+        assert_eq!(err.code, sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM);
+    }
+
+    #[test]
+    fn decoded_view_to_owned_copies_packed_pixels() {
+        let width = 2u32;
+        let height = 2u32;
+        let bpp = 4usize;
+        // stride allows padding beyond logical width.
+        let stride_px = 4usize;
+        let mut buf = vec![0u8; stride_px * height as usize * bpp];
+        // First row: pixels 1 and 2, then padding.
+        buf[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        // Second row starts at stride offset.
+        let row2_start = stride_px * bpp;
+        buf[row2_start..row2_start + 8].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+
+        let planes = [buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut()];
+        let mut raw = sys::uhdr_raw_image {
+            fmt: sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
+            cg: sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
+            ct: sys::uhdr_color_transfer::UHDR_CT_PQ,
+            range: sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w: width,
+            h: height,
+            planes,
+            stride: [stride_px as u32, 0, 0],
+        };
+        let view = DecodedPackedView::new(&mut raw).unwrap();
+        let owned = view.to_owned().unwrap();
+        assert_eq!(owned.data.len(), width as usize * height as usize * bpp);
+        assert_eq!(&owned.data[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&owned.data[8..], &[9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn bytes_per_pixel_matches_supported_formats() {
+        assert_eq!(
+            bytes_per_pixel(sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888).unwrap(),
+            4
+        );
+        assert_eq!(
+            bytes_per_pixel(sys::uhdr_img_fmt::UHDR_IMG_FMT_64bppRGBAHalfFloat).unwrap(),
+            8
+        );
+        let err = bytes_per_pixel(sys::uhdr_img_fmt::UHDR_IMG_FMT_UNSPECIFIED).unwrap_err();
+        assert_eq!(err.code, sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM);
     }
 }
