@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::env;
 use std::fs;
-use ultrahdr::{sys, CompressedImage, Decoder, Encoder, ImgLabel};
+use ultrahdr::{sys, CompressedImage, Decoder, Encoder, GainMapMetadata, ImgLabel};
 
 #[derive(Debug)]
 struct Args {
@@ -12,6 +12,7 @@ struct Args {
     gainmap_quality: i32,
     gainmap_scale: i32,
     multichannel_gainmap: bool,
+    target_peak_nits: Option<f32>,
 }
 
 impl Args {
@@ -23,6 +24,7 @@ impl Args {
         let mut gainmap_quality = 95;
         let mut gainmap_scale = 1;
         let mut multichannel_gainmap = false;
+        let mut target_peak_nits = None;
 
         let args: Vec<String> = env::args().collect();
         let mut i = 1;
@@ -64,6 +66,10 @@ impl Args {
                 "--mc" => {
                     multichannel_gainmap = true;
                 }
+                "--target-peak" => {
+                    i += 1;
+                    target_peak_nits = args.get(i).and_then(|s| s.parse().ok());
+                }
                 _ => {
                     bail!("Unknown arg: {}", args[i]);
                 }
@@ -72,7 +78,7 @@ impl Args {
         }
 
         if hdr_uhdr_path.is_empty() || sdr_path.is_empty() {
-            bail!("Usage: --hdr <uhdr_jpeg> --sdr <sdr_jpeg> [--out <file>] [--base-q 95] [--gm-q 95] [--scale 1] [--mc]");
+            bail!("Usage: --hdr <uhdr_jpeg> --sdr <sdr_jpeg> [--out <file>] [--base-q 95] [--gm-q 95] [--scale 1] [--mc] [--target-peak <nits>]");
         }
 
         Ok(Self {
@@ -83,8 +89,21 @@ impl Args {
             gainmap_quality,
             gainmap_scale,
             multichannel_gainmap,
+            target_peak_nits,
         })
     }
+}
+
+fn read_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>> {
+    let mut dec = Decoder::new()?;
+    let mut comp = CompressedImage::from_bytes(
+        buf,
+        sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
+        sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
+        sys::uhdr_color_range::UHDR_CR_UNSPECIFIED,
+    );
+    dec.set_image(&mut comp)?;
+    Ok(dec.gainmap_metadata()?)
 }
 
 fn main() -> Result<()> {
@@ -94,6 +113,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to read HDR UltraHDR file {}", args.hdr_uhdr_path))?;
     let mut sdr_bytes = fs::read(&args.sdr_path)
         .with_context(|| format!("Failed to read SDR JPEG file {}", args.sdr_path))?;
+    let gainmap_meta = read_gainmap_metadata(&mut hdr_bytes)?;
 
     // Decode HDR intent from UltraHDR JPEG.
     let mut dec = Decoder::new()?;
@@ -135,7 +155,19 @@ fn main() -> Result<()> {
     enc.set_gainmap_scale_factor(args.gainmap_scale)?;
     enc.set_using_multi_channel_gainmap(args.multichannel_gainmap)?;
     enc.set_gainmap_gamma(1.0)?;
-    enc.set_target_display_peak_brightness(10000.0)?;
+    let target_peak = args
+        .target_peak_nits
+        .or_else(|| gainmap_meta.as_ref().map(|m| m.target_display_peak_nits()))
+        .unwrap_or(1600.0);
+    if let Some(meta) = &gainmap_meta {
+        println!(
+            "Source gain map target peak: {:.1} nits (hdr_capacity_max={:.3})",
+            meta.target_display_peak_nits(),
+            meta.hdr_capacity_max
+        );
+    }
+    println!("Using target peak brightness: {:.1} nits", target_peak);
+    enc.set_target_display_peak_brightness(target_peak)?;
     enc.set_output_format(sys::uhdr_codec::UHDR_CODEC_JPG)?;
     enc.set_preset(sys::uhdr_enc_preset::UHDR_USAGE_BEST_QUALITY)?;
     enc.encode()?;

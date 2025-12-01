@@ -1,6 +1,6 @@
 use crate::error::{check, Error, Result};
 use crate::sys;
-use crate::types::{ColorTransfer, CompressedImage, DecodedPackedView, ImgFormat};
+use crate::types::{ColorTransfer, CompressedImage, DecodedPackedView, GainMapMetadata, ImgFormat};
 use std::ptr::NonNull;
 
 pub struct Decoder {
@@ -38,6 +38,17 @@ impl Decoder {
     pub fn probe(&mut self) -> Result<()> {
         let err = unsafe { sys::uhdr_dec_probe(self.raw.as_ptr()) };
         check(err)
+    }
+
+    /// Read gain map metadata (if present). Requires the image to be set.
+    pub fn gainmap_metadata(&mut self) -> Result<Option<GainMapMetadata>> {
+        self.probe()?;
+        let ptr = unsafe { sys::uhdr_dec_get_gainmap_metadata(self.raw.as_ptr()) };
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        // SAFETY: pointer owned by decoder; copied into owned struct.
+        Ok(Some(GainMapMetadata::from_sys(unsafe { &*ptr })))
     }
 
     pub fn decode(&mut self) -> Result<()> {

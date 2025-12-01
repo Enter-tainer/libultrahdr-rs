@@ -14,6 +14,9 @@ pub type ImgLabel = sys::uhdr_img_label_t;
 pub type EncPreset = sys::uhdr_enc_preset_t;
 pub type ErrorCode = sys::uhdr_codec_err_t;
 
+/// Nominal SDR diffuse white used by libultrahdr for capacity math (ISO/TS 22028-5).
+pub const SDR_WHITE_NITS: f32 = 203.0;
+
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
     pub data: Vec<u8>,
@@ -235,6 +238,38 @@ impl<'a> DecodedPackedView<'a> {
             height: img.h,
             data,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GainMapMetadata {
+    pub max_content_boost: [f32; 3],
+    pub min_content_boost: [f32; 3],
+    pub gamma: [f32; 3],
+    pub offset_sdr: [f32; 3],
+    pub offset_hdr: [f32; 3],
+    pub hdr_capacity_min: f32,
+    pub hdr_capacity_max: f32,
+    pub use_base_cg: bool,
+}
+
+impl GainMapMetadata {
+    pub(crate) fn from_sys(meta: &sys::uhdr_gainmap_metadata) -> Self {
+        Self {
+            max_content_boost: meta.max_content_boost,
+            min_content_boost: meta.min_content_boost,
+            gamma: meta.gamma,
+            offset_sdr: meta.offset_sdr,
+            offset_hdr: meta.offset_hdr,
+            hdr_capacity_min: meta.hdr_capacity_min,
+            hdr_capacity_max: meta.hdr_capacity_max,
+            use_base_cg: meta.use_base_cg != 0,
+        }
+    }
+
+    /// Target display peak brightness in nits (capacity * SDR reference white).
+    pub fn target_display_peak_nits(&self) -> f32 {
+        self.hdr_capacity_max * SDR_WHITE_NITS
     }
 }
 
