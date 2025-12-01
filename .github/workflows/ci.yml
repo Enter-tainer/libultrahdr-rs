@@ -52,3 +52,85 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace --all-features --locked
+
+  release-binaries:
+    name: Build release binaries (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            os: linux
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            os: linux
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            os: macos
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            os: windows
+          - runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            os: windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            nasm \
+            pkg-config \
+            libegl1-mesa-dev \
+            libgles2-mesa-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja nasm pkg-config
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install nasm cmake ninja -y
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build ultrahdr-bake (release)
+        run: cargo build -p ultrahdr-bake --release --locked --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -eo pipefail
+          ARTIFACT_DIR="artifacts/${{ matrix.target }}"
+          mkdir -p "$ARTIFACT_DIR"
+          case "${{ matrix.os }}" in
+            windows) BIN="target/${{ matrix.target }}/release/ultrahdr-bake.exe" ;;
+            *) BIN="target/${{ matrix.target }}/release/ultrahdr-bake" ;;
+          esac
+          cp "$BIN" "$ARTIFACT_DIR/"
+          if [ -f LICENSE ]; then cp LICENSE "$ARTIFACT_DIR/"; fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultrahdr-bake-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}
