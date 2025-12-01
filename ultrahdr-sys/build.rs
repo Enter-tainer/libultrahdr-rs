@@ -90,6 +90,16 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/build", dst.display());
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_env == "msvc" {
+        println!(
+            "cargo:rustc-link-search=native={}/build/Release",
+            dst.display()
+        );
+        println!(
+            "cargo:rustc-link-search=native={}/build/Debug",
+            dst.display()
+        );
+    }
 
     if cfg!(feature = "vendored") {
         println!(
