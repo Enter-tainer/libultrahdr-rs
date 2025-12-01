@@ -72,7 +72,14 @@ fn main() {
     );
 
     // Build only the main library target; install target is disabled upstream.
-    cfg.build_target("uhdr");
+    let cmake_target = if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc"
+        && !cfg!(feature = "shared")
+    {
+        "uhdr-static"
+    } else {
+        "uhdr"
+    };
+    cfg.build_target(cmake_target);
 
     let dst = cfg.build();
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
