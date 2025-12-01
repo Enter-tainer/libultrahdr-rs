@@ -88,18 +88,24 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-search=native={}/lib64", dst.display());
     println!("cargo:rustc-link-search=native={}/build", dst.display());
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
     if cfg!(feature = "vendored") {
         println!(
             "cargo:rustc-link-search=native={}/build/turbojpeg/src/turbojpeg-build",
             dst.display()
         );
-        println!("cargo:rustc-link-lib=static=jpeg");
+        let jpeg_name = if target_env == "msvc" {
+            "jpeg-static"
+        } else {
+            "jpeg"
+        };
+        println!("cargo:rustc-link-lib=static={}", jpeg_name);
     } else {
         println!("cargo:rustc-link-lib=jpeg");
     }
 
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let shared = cfg!(feature = "shared");
     let link_name = if target_env == "msvc" && !shared {
         "uhdr-static"
