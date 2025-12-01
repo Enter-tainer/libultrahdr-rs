@@ -6,6 +6,7 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use clap::{builder::ValueHint, Parser};
 use ultrahdr::{sys, CompressedImage, Decoder, Encoder, Error, GainMapMetadata, ImgLabel};
+use xmpkit::{ns, XmpFile};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -174,12 +175,82 @@ fn resolve_inputs(args: &Cli) -> Result<InputPair> {
         });
     }
 
+    if args.inputs.len() == 1 {
+        return resolve_by_original_id(&args.inputs[0]);
+    }
+
     ensure!(
         args.inputs.len() == 2,
-        "Provide --hdr and --sdr, or exactly two positional JPEGs for auto-detection"
+        "Provide --hdr and --sdr, or 1-2 positional JPEGs for auto-detection"
     );
-    let a = &args.inputs[0];
-    let b = &args.inputs[1];
+    auto_detect_pair(&args.inputs[0], &args.inputs[1])
+}
+
+fn resolve_by_original_id(seed: &Path) -> Result<InputPair> {
+    let seed_doc_id = original_document_id(seed)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Input {} missing XMP OriginalDocumentID; cannot find pair",
+            seed.display()
+        )
+    })?;
+    let ext = seed
+        .extension()
+        .and_then(|e| e.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Input {} has no extension", seed.display()))?;
+    let dir = seed
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let mut matches = Vec::new();
+    for entry in
+        fs::read_dir(&dir).with_context(|| format!("Failed to list directory {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path == seed || !path.is_file() {
+            continue;
+        }
+        let same_ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case(ext))
+            .unwrap_or(false);
+        if !same_ext {
+            continue;
+        }
+        if let Some(doc_id) = original_document_id(&path)? {
+            if doc_id == seed_doc_id {
+                matches.push(path);
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => bail!(
+            "No sibling with matching OriginalDocumentID ({}) found for {}",
+            seed_doc_id,
+            seed.display()
+        ),
+        1 => {
+            let mate = matches.pop().expect("len==1");
+            println!(
+                "Found matching OriginalDocumentID ({}) between {} and {}",
+                seed_doc_id,
+                seed.display(),
+                mate.display()
+            );
+            auto_detect_pair(seed, &mate)
+        }
+        _ => bail!(
+            "Multiple siblings share OriginalDocumentID ({}) with {}. Please specify --hdr/--sdr explicitly.",
+            seed_doc_id,
+            seed.display()
+        ),
+    }
+}
+
+fn auto_detect_pair(a: &Path, b: &Path) -> Result<InputPair> {
     let a_det = detect_hdr_candidate(a)?;
     let b_det = detect_hdr_candidate(b)?;
 
@@ -191,8 +262,8 @@ fn resolve_inputs(args: &Cli) -> Result<InputPair> {
                 reason.as_str()
             );
             Ok(InputPair {
-                hdr: a.clone(),
-                sdr: b.clone(),
+                hdr: a.to_path_buf(),
+                sdr: b.to_path_buf(),
             })
         }
         (None, Some(reason)) => {
@@ -202,8 +273,8 @@ fn resolve_inputs(args: &Cli) -> Result<InputPair> {
                 reason.as_str()
             );
             Ok(InputPair {
-                hdr: b.clone(),
-                sdr: a.clone(),
+                hdr: b.to_path_buf(),
+                sdr: a.to_path_buf(),
             })
         }
         (Some(_), Some(_)) => bail!(
@@ -220,6 +291,19 @@ fn detect_hdr_candidate(path: &Path) -> Result<Option<HdrDetection>> {
         fs::read(path).with_context(|| format!("Failed to read input {}", path.display()))?;
     let meta = probe_gainmap_metadata(&mut bytes)?;
     Ok(meta.map(|_| HdrDetection::ProbeGainMapMetadata))
+}
+
+fn original_document_id(path: &Path) -> Result<Option<String>> {
+    let mut file = XmpFile::new();
+    file.open(path)
+        .with_context(|| format!("Failed to open {} for XMP", path.display()))?;
+    let xmp = match file.get_xmp() {
+        Some(meta) => meta,
+        None => return Ok(None),
+    };
+    Ok(xmp
+        .get_property(ns::XMP_MM, "OriginalDocumentID")
+        .and_then(|v| v.as_str().map(str::to_owned)))
 }
 
 fn probe_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>> {
