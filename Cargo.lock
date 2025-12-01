@@ -428,6 +428,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ultrahdr-bake"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ultrahdr",
+]
+
+[[package]]
 name = "ultrahdr-sys"
 version = "0.1.0"
 dependencies = [

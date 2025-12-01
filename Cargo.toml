@@ -1,5 +1,5 @@
 [workspace]
-members = ["ultrahdr-sys", "ultrahdr"]
+members = ["ultrahdr-sys", "ultrahdr", "ultrahdr-bake"]
 resolver = "2"
 
 [workspace.package]
