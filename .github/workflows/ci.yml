@@ -64,10 +64,7 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             os: linux
-          - runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            os: linux
-          - runner: macos-latest
+          - runner: macos-14
             target: aarch64-apple-darwin
             os: macos
           - runner: windows-latest
@@ -90,18 +87,6 @@ jobs:
             nasm \
             pkg-config
 
-      - name: Install cross toolchain (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            pkg-config-aarch64-linux-gnu \
-            libssl-dev:arm64 \
-            libegl1-mesa-dev:arm64 \
-            libgles2-mesa-dev:arm64
-
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -121,11 +106,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build ultrahdr-bake (release)
-        env:
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig
         run: cargo build -p ultrahdr-bake --release --locked --target ${{ matrix.target }}
 
       - name: Prepare artifact
