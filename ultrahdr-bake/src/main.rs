@@ -1,8 +1,11 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use clap::{builder::ValueHint, Parser};
-use ultrahdr::{sys, CompressedImage, Decoder, Encoder, GainMapMetadata, ImgLabel};
+use ultrahdr::{sys, CompressedImage, Decoder, Encoder, Error, GainMapMetadata, ImgLabel};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -13,13 +16,17 @@ use ultrahdr::{sys, CompressedImage, Decoder, Encoder, GainMapMetadata, ImgLabel
     arg_required_else_help = true
 )]
 struct Cli {
+    /// Two JPEGs; autodetect which is HDR (ISO 21496 gain map) vs SDR
+    #[arg(value_name = "FILE", value_hint = ValueHint::FilePath, num_args = 0..=2)]
+    inputs: Vec<PathBuf>,
+
     /// UltraHDR JPEG containing the HDR intent and gain map
     #[arg(long, value_hint = ValueHint::FilePath, value_name = "FILE")]
-    hdr: PathBuf,
+    hdr: Option<PathBuf>,
 
     /// SDR base JPEG to embed into the UltraHDR output
     #[arg(long, short = 's', value_hint = ValueHint::FilePath, value_name = "FILE")]
-    sdr: PathBuf,
+    sdr: Option<PathBuf>,
 
     /// Output UltraHDR JPEG path
     #[arg(long, short = 'o', value_hint = ValueHint::FilePath, value_name = "FILE", default_value = "ultrahdr_bake_out.jpg")]
@@ -52,6 +59,11 @@ fn main() -> Result<()> {
 }
 
 fn run(args: Cli) -> Result<()> {
+    ensure!(
+        args.inputs.is_empty() || (args.hdr.is_none() && args.sdr.is_none()),
+        "Provide either two positional JPEGs for auto-detection or --hdr/--sdr, not both"
+    );
+
     if let Some(target_peak) = args.target_peak_nits.as_ref() {
         ensure!(
             *target_peak > 0.0,
@@ -59,11 +71,13 @@ fn run(args: Cli) -> Result<()> {
         );
     }
 
-    let mut hdr_bytes = fs::read(&args.hdr)
-        .with_context(|| format!("Failed to read HDR UltraHDR file {}", args.hdr.display()))?;
-    let mut sdr_bytes = fs::read(&args.sdr)
-        .with_context(|| format!("Failed to read SDR JPEG file {}", args.sdr.display()))?;
-    let gainmap_meta = read_gainmap_metadata(&mut hdr_bytes)?;
+    let inputs = resolve_inputs(&args)?;
+
+    let mut hdr_bytes = fs::read(&inputs.hdr)
+        .with_context(|| format!("Failed to read HDR UltraHDR file {}", inputs.hdr.display()))?;
+    let mut sdr_bytes = fs::read(&inputs.sdr)
+        .with_context(|| format!("Failed to read SDR JPEG file {}", inputs.sdr.display()))?;
+    let gainmap_meta = probe_gainmap_metadata(&mut hdr_bytes)?;
 
     // Decode HDR intent from UltraHDR JPEG.
     let mut dec = Decoder::new()?;
@@ -131,7 +145,84 @@ fn run(args: Cli) -> Result<()> {
     Ok(())
 }
 
-fn read_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>> {
+#[derive(Debug)]
+struct InputPair {
+    hdr: PathBuf,
+    sdr: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HdrDetection {
+    ProbeGainMapMetadata,
+}
+
+impl HdrDetection {
+    fn as_str(&self) -> &'static str {
+        "libuhdr probe found gain map metadata"
+    }
+}
+
+fn resolve_inputs(args: &Cli) -> Result<InputPair> {
+    if args.hdr.is_some() || args.sdr.is_some() {
+        ensure!(
+            args.hdr.is_some() && args.sdr.is_some(),
+            "Provide both --hdr and --sdr together (or omit both to auto-detect)"
+        );
+        return Ok(InputPair {
+            hdr: args.hdr.clone().expect("hdr is_some checked"),
+            sdr: args.sdr.clone().expect("sdr is_some checked"),
+        });
+    }
+
+    ensure!(
+        args.inputs.len() == 2,
+        "Provide --hdr and --sdr, or exactly two positional JPEGs for auto-detection"
+    );
+    let a = &args.inputs[0];
+    let b = &args.inputs[1];
+    let a_det = detect_hdr_candidate(a)?;
+    let b_det = detect_hdr_candidate(b)?;
+
+    match (a_det, b_det) {
+        (Some(reason), None) => {
+            println!(
+                "Auto-detected HDR input: {} ({})",
+                a.display(),
+                reason.as_str()
+            );
+            Ok(InputPair {
+                hdr: a.clone(),
+                sdr: b.clone(),
+            })
+        }
+        (None, Some(reason)) => {
+            println!(
+                "Auto-detected HDR input: {} ({})",
+                b.display(),
+                reason.as_str()
+            );
+            Ok(InputPair {
+                hdr: b.clone(),
+                sdr: a.clone(),
+            })
+        }
+        (Some(_), Some(_)) => bail!(
+            "Both inputs look like UltraHDR (ISO 21496 gain map metadata). Please specify --hdr and --sdr explicitly."
+        ),
+        (None, None) => bail!(
+            "Could not find ISO 21496 gain map metadata in either input. Specify --hdr and --sdr explicitly."
+        ),
+    }
+}
+
+fn detect_hdr_candidate(path: &Path) -> Result<Option<HdrDetection>> {
+    let mut bytes =
+        fs::read(path).with_context(|| format!("Failed to read input {}", path.display()))?;
+    let meta = probe_gainmap_metadata(&mut bytes)?;
+    Ok(meta.map(|_| HdrDetection::ProbeGainMapMetadata))
+}
+
+fn probe_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>> {
     let mut dec = Decoder::new()?;
     let mut comp = CompressedImage::from_bytes(
         buf,
@@ -140,5 +231,20 @@ fn read_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>> {
         sys::uhdr_color_range::UHDR_CR_UNSPECIFIED,
     );
     dec.set_image(&mut comp)?;
-    Ok(dec.gainmap_metadata()?)
+    match dec.gainmap_metadata() {
+        Ok(meta) => Ok(meta),
+        Err(e)
+            if matches!(
+                e,
+                Error {
+                    code: sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM,
+                    ..
+                }
+            ) =>
+        {
+            // Not an UltraHDR/gain map JPEG.
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
+    }
 }

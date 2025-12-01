@@ -61,6 +61,15 @@ fn main() {
     if cfg!(feature = "gles") {
         cfg.define("UHDR_ENABLE_GLES", "ON");
     }
+    // Control ISO 21496-1 metadata emission via feature flag (default ON).
+    cfg.define(
+        "UHDR_WRITE_ISO",
+        if cfg!(feature = "iso21496") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
 
     // Build only the main library target; install target is disabled upstream.
     cfg.build_target("uhdr");

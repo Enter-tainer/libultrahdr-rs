@@ -6,10 +6,11 @@ description = "Safe-ish Rust wrapper around libultrahdr"
 license = "Apache-2.0"
 
 [features]
-default = ["vendored"]
+default = ["vendored", "iso21496"]
 vendored = ["ultrahdr-sys/vendored"]
 shared = ["ultrahdr-sys/shared"]
 gles = ["ultrahdr-sys/gles"]
+iso21496 = ["ultrahdr-sys/iso21496"]
 
 [dependencies]
 ultrahdr-sys = { path = "../ultrahdr-sys" }

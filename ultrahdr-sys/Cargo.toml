@@ -8,13 +8,15 @@ description = "Raw FFI bindings to libultrahdr"
 license = "Apache-2.0"
 
 [features]
-default = ["vendored"]
+default = ["vendored", "iso21496"]
 # Build libjpeg-turbo and other deps from source via upstream CMake flag.
 vendored = []
 # Link shared library instead of static.
 shared = []
 # Enable GLES in upstream build (links EGL/GLES).
 gles = []
+# Enable writing ISO/TS 21496-1 gain map metadata.
+iso21496 = []
 
 [dependencies]
 
@@ -23,5 +25,5 @@ bindgen = "0.69"
 cmake = "0.1"
 
 [package.metadata.docs.rs]
-features = ["vendored"]
+features = ["vendored", "iso21496"]
 default-target = "x86_64-unknown-linux-gnu"
