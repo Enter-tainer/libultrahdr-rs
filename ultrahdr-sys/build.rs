@@ -96,6 +96,16 @@ fn main() {
             "cargo:rustc-link-search=native={}/build/turbojpeg/src/turbojpeg-build",
             dst.display()
         );
+        if target_env == "msvc" {
+            println!(
+                "cargo:rustc-link-search=native={}/build/turbojpeg/src/turbojpeg-build/Release",
+                dst.display()
+            );
+            println!(
+                "cargo:rustc-link-search=native={}/build/turbojpeg/src/turbojpeg-build/Debug",
+                dst.display()
+            );
+        }
         let jpeg_name = if target_env == "msvc" {
             "jpeg-static"
         } else {
