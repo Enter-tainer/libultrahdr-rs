@@ -1,11 +1,18 @@
 use std::{
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
 use anyhow::{bail, ensure, Context, Result};
+use memchr::memmem;
 use ultrahdr::{sys, CompressedImage, Decoder, Error, GainMapMetadata};
-use xmpkit::{ns, XmpFile};
+
+// Tunable knobs for XMP scanning. Bump these if your XMP lives deeper in the file.
+const XMP_SCAN_LIMIT_BYTES: usize = 256 * 1024;
+const XMP_CHUNK_SIZE: usize = 8192;
+const XMP_EXTRA_TAIL_CHUNK: usize = 4096;
+const XMP_EXTRA_TAIL_READS: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub enum HdrDetection {
@@ -177,14 +184,82 @@ pub fn probe_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>>
 }
 
 fn original_document_id(path: &Path) -> Result<Option<String>> {
-    let mut file = XmpFile::new();
-    file.open(path)
-        .with_context(|| format!("Failed to open {} for XMP", path.display()))?;
-    let xmp = match file.get_xmp() {
-        Some(meta) => meta,
-        None => return Ok(None),
-    };
-    Ok(xmp
-        .get_property(ns::XMP_MM, "OriginalDocumentID")
-        .and_then(|v| v.as_str().map(str::to_owned)))
+    let file = fs::File::open(path).with_context(|| {
+        format!(
+            "Failed to read {} for OriginalDocumentID scan",
+            path.display()
+        )
+    })?;
+    let marker = b"OriginalDocumentID";
+    let step = XMP_CHUNK_SIZE;
+    let mut offset: usize = 0;
+    let mut buf = vec![0u8; step + marker.len()];
+
+    while offset < XMP_SCAN_LIMIT_BYTES {
+        let mut f = file.try_clone()?;
+        f.seek(SeekFrom::Start(offset as u64))?;
+        let to_read = buf.len().min(XMP_SCAN_LIMIT_BYTES.saturating_sub(offset));
+        let n = read_exact_allow_short(&mut f, &mut buf[..to_read])?;
+        if n == 0 {
+            break;
+        }
+        let slice = &buf[..n];
+        if let Some(pos) = memmem::find(slice, marker) {
+            let tail_start = offset + pos + marker.len();
+            let mut tail = vec![0u8; XMP_EXTRA_TAIL_CHUNK * XMP_EXTRA_TAIL_READS];
+            let mut tail_file = file.try_clone()?;
+            tail_file.seek(SeekFrom::Start(tail_start as u64))?;
+            let m = read_exact_allow_short(&mut tail_file, &mut tail)?;
+            return Ok(extract_original_document_id(&tail[..m]));
+        }
+        offset = offset.saturating_add(step);
+    }
+
+    Ok(None)
+}
+
+fn extract_original_document_id(after_marker: &[u8]) -> Option<String> {
+    // Try element form: <xmpMM:OriginalDocumentID>VALUE</xmpMM:OriginalDocumentID>
+    if let Some(gt_pos) = after_marker.iter().position(|&b| b == b'>') {
+        let value_start = gt_pos + 1;
+        if let Some(end_pos) = after_marker[value_start..].iter().position(|&b| b == b'<') {
+            let raw = &after_marker[value_start..value_start + end_pos];
+            if let Ok(s) = String::from_utf8(raw.to_vec()) {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    // Fallback: attribute form OriginalDocumentID="VALUE"
+    if let Some(eq_pos) = after_marker.iter().position(|&b| b == b'=') {
+        let rest = &after_marker[eq_pos + 1..];
+        if let Some(first_quote) = rest.iter().position(|&b| b == b'"') {
+            let rest_after_quote = &rest[first_quote + 1..];
+            if let Some(second_quote) = rest_after_quote.iter().position(|&b| b == b'"') {
+                let raw = &rest_after_quote[..second_quote];
+                if let Ok(s) = String::from_utf8(raw.to_vec()) {
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn read_exact_allow_short<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match r.read(&mut buf[filled..])? {
+            0 => break,
+            n => filled += n,
+        }
+    }
+    Ok(filled)
 }
