@@ -31,7 +31,7 @@ pub struct InputPair {
     pub sdr: PathBuf,
 }
 
-pub fn resolve_inputs(args: &crate::cli::Cli) -> Result<InputPair> {
+pub fn resolve_inputs(args: &crate::cli::BakeArgs) -> Result<InputPair> {
     if args.hdr.is_some() || args.sdr.is_some() {
         ensure!(
             args.hdr.is_some() && args.sdr.is_some(),

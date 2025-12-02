@@ -6,7 +6,7 @@ use ultrahdr::{sys, CompressedImage, Decoder, Encoder, ImgLabel};
 use crate::color::{detect_icc_color_gamut, gamut_label};
 use crate::detect::probe_gainmap_metadata;
 
-pub fn run_encoding(args: &crate::cli::Cli, inputs: &crate::detect::InputPair) -> Result<()> {
+pub fn run_encoding(args: &crate::cli::BakeArgs, inputs: &crate::detect::InputPair) -> Result<()> {
     if let Some(target_peak) = args.target_peak_nits.as_ref() {
         ensure!(
             *target_peak > 0.0,
