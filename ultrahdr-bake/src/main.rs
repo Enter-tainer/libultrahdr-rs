@@ -2,6 +2,7 @@ use anyhow::{ensure, Result};
 use clap::Parser;
 
 mod cli;
+mod color;
 mod detect;
 mod encode;
 

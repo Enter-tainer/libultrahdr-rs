@@ -3,6 +3,7 @@ use std::fs;
 use anyhow::{ensure, Context, Result};
 use ultrahdr::{sys, CompressedImage, Decoder, Encoder, ImgLabel};
 
+use crate::color::{detect_icc_color_gamut, gamut_label};
 use crate::detect::probe_gainmap_metadata;
 
 pub fn run_encoding(args: &crate::cli::Cli, inputs: &crate::detect::InputPair) -> Result<()> {
@@ -17,13 +18,22 @@ pub fn run_encoding(args: &crate::cli::Cli, inputs: &crate::detect::InputPair) -
         .with_context(|| format!("Failed to read HDR UltraHDR file {}", inputs.hdr.display()))?;
     let mut sdr_bytes = fs::read(&inputs.sdr)
         .with_context(|| format!("Failed to read SDR JPEG file {}", inputs.sdr.display()))?;
+    let hdr_icc_gamut = detect_icc_color_gamut(&hdr_bytes);
+    let sdr_icc_gamut = detect_icc_color_gamut(&sdr_bytes);
     let gainmap_meta = probe_gainmap_metadata(&mut hdr_bytes)?;
+
+    if let Some(cg) = hdr_icc_gamut {
+        println!("HDR ICC gamut: {}", gamut_label(cg));
+    }
+    if let Some(cg) = sdr_icc_gamut {
+        println!("SDR ICC gamut: {}", gamut_label(cg));
+    }
 
     // Decode HDR intent from UltraHDR JPEG.
     let mut dec = Decoder::new()?;
     let mut hdr_comp = CompressedImage::from_bytes(
         &mut hdr_bytes,
-        sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
+        hdr_icc_gamut.unwrap_or(sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED),
         sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
         sys::uhdr_color_range::UHDR_CR_UNSPECIFIED,
     );
@@ -33,7 +43,8 @@ pub fn run_encoding(args: &crate::cli::Cli, inputs: &crate::detect::InputPair) -
         sys::uhdr_color_transfer::UHDR_CT_PQ,
     )?;
     if hdr_view.meta().0 == sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED {
-        hdr_view.set_color_gamut(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3);
+        hdr_view
+            .set_color_gamut(hdr_icc_gamut.unwrap_or(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3));
     }
     if hdr_view.meta().1 == sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED {
         hdr_view.set_color_transfer(sys::uhdr_color_transfer::UHDR_CT_PQ);
@@ -46,7 +57,7 @@ pub fn run_encoding(args: &crate::cli::Cli, inputs: &crate::detect::InputPair) -
 
     let mut sdr_comp = CompressedImage::from_bytes(
         &mut sdr_bytes,
-        sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
+        sdr_icc_gamut.unwrap_or(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3),
         sys::uhdr_color_transfer::UHDR_CT_SRGB,
         sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
     );
