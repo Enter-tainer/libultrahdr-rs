@@ -402,7 +402,7 @@ fn build_mpf_payload(
     Ok(buf)
 }
 
-fn replace_mpf_segment(segments: &mut Vec<JpegSegment>, info: &MpfInfo, payload: Vec<u8>) {
+fn replace_mpf_segment(segments: &mut [JpegSegment], info: &MpfInfo, payload: Vec<u8>) {
     segments[info.segment_index] =
         JpegSegment::new_with_contents(markers::APP2, Bytes::from(payload));
 }
@@ -435,12 +435,8 @@ fn merge_into_existing_xmp(existing: &[u8], meta: &MotionMeta) -> Result<Vec<u8>
             Ok(Event::Start(_)) if dropping > 0 => {
                 dropping += 1;
             }
-            Ok(Event::End(ref e)) if dropping > 0 => {
-                if e.name().as_ref() == b"Container:Directory" && dropping > 0 {
-                    dropping -= 1;
-                } else if dropping > 0 {
-                    dropping -= 1;
-                }
+            Ok(Event::End(_)) if dropping > 0 => {
+                dropping = dropping.saturating_sub(1);
             }
             Ok(Event::Empty(_)) if dropping > 0 => {}
             Ok(Event::End(ref e)) if e.name().as_ref() == b"rdf:RDF" => {
