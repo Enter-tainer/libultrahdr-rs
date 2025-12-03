@@ -1,0 +1,302 @@
+From b005aacd504fb79390e2b675d3bea6f50a5ef093 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] libultrahdr: optional single-threaded build
+
+Adds CMake option `UHDR_DISABLE_THREADS` and guards `jpegr.cpp` threading code
+so builds can target platforms without `std::thread` (e.g. WASI without
+threads). Default remains multi-threaded.
+
+---
+ CMakeLists.txt    | 17 +++++++--
+ lib/src/jpegr.cpp | 94 ++++++++++++++++++++++++++++++++++++++++++++++--------
+ 2 files changed, 94 insertions(+), 30 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5128335..40bdc18 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -132,6 +132,7 @@ option_if_not_defined(UHDR_ENABLE_INSTALL "Enable install and uninstall targets
+ option_if_not_defined(UHDR_ENABLE_INTRINSICS "Build with SIMD acceleration " TRUE)
+ option_if_not_defined(UHDR_ENABLE_GLES "Build with GPU acceleration " FALSE)
+ option_if_not_defined(UHDR_ENABLE_WERROR "Build with -Werror" FALSE)
++option_if_not_defined(UHDR_DISABLE_THREADS "Build without std::thread usage (single-threaded)" FALSE)
+ 
+ # These options effect only encoding process.
+ # Decoding continues to support both iso and xmp irrespective of this configuration.
+@@ -374,9 +375,11 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+ endif()
+ 
+ # Threads
+-set(CMAKE_THREAD_PREFER_PTHREAD ON)
+-set(THREADS_PREFER_PTHREAD_FLAG ON)
+-find_package(Threads REQUIRED)
++if(NOT UHDR_DISABLE_THREADS)
++  set(CMAKE_THREAD_PREFER_PTHREAD ON)
++  set(THREADS_PREFER_PTHREAD_FLAG ON)
++  find_package(Threads REQUIRED)
++endif()
+ 
+ include(ExternalProject)
+ 
+@@ -604,7 +607,10 @@ file(GLOB UHDR_BM_SRCS_LIST "${BENCHMARK_DIR}/*.cpp")
+ file(GLOB IMAGE_IO_SRCS_LIST "${THIRD_PARTY_DIR}/image_io/src/**/*.cc")
+ 
+ set(PRIVATE_INCLUDE_DIR ${SOURCE_DIR}/include/ ${JPEG_INCLUDE_DIRS})
+-set(PRIVATE_LINK_LIBS ${JPEG_LIBRARIES} Threads::Threads)
++set(PRIVATE_LINK_LIBS ${JPEG_LIBRARIES})
++if(NOT UHDR_DISABLE_THREADS)
++  list(APPEND PRIVATE_LINK_LIBS Threads::Threads)
++endif()
+ if(UHDR_ENABLE_GLES)
+   list(APPEND PRIVATE_INCLUDE_DIR ${EGL_INCLUDE_DIRS} ${OPENGLES3_INCLUDE_DIRS})
+   list(APPEND PRIVATE_LINK_LIBS ${EGL_LIBRARIES} ${OPENGLES3_LIBRARIES})
+@@ -623,6 +629,9 @@ target_include_directories(${IMAGEIO_TARGET_NAME} PRIVATE
+ set(UHDR_CORE_LIB_NAME core)
+ add_library(${UHDR_CORE_LIB_NAME} STATIC ${UHDR_CORE_SRCS_LIST})
+ target_compile_options(${UHDR_CORE_LIB_NAME} PRIVATE ${UHDR_WERROR_FLAGS})
++if(UHDR_DISABLE_THREADS)
++  target_compile_definitions(${UHDR_CORE_LIB_NAME} PUBLIC UHDR_NO_THREADS)
++endif()
+ if(NOT JPEG_FOUND)
+   add_dependencies(${UHDR_CORE_LIB_NAME} ${JPEGTURBO_TARGET_NAME})
+ endif()
+diff --git a/lib/src/jpegr.cpp b/lib/src/jpegr.cpp
+index 284697f..6b6f898 100644
+--- a/lib/src/jpegr.cpp
++++ b/lib/src/jpegr.cpp
+@@ -21,11 +21,16 @@
+ #include <unistd.h>
+ #endif
+ 
+-#include <condition_variable>
+ #include <deque>
+ #include <functional>
++#include <tuple>
++#include <vector>
++
++#ifndef UHDR_NO_THREADS
++#include <condition_variable>
+ #include <mutex>
+ #include <thread>
++#endif
+ 
+ #include "ultrahdr/editorhelper.h"
+ #include "ultrahdr/gainmapmetadata.h"
+@@ -71,6 +76,7 @@ static const string kIsoNameSpace = "urn:iso:std:iso:ts:21496:-1";
+ static_assert(kWriteXmpMetadata || kWriteIso21496_1Metadata,
+               "Must write gain map metadata in XMP format, or iso 21496-1 format, or both.");
+ 
++#ifndef UHDR_NO_THREADS
+ class JobQueue {
+  public:
+   bool dequeueJob(unsigned int& rowStart, unsigned int& rowEnd);
+@@ -124,6 +130,28 @@ void JobQueue::reset() {
+   mJobs.clear();
+   mQueuedAllJobs = false;
+ }
++#else
++// Single-threaded fallback for targets without std::thread support.
++class JobQueue {
++ public:
++  bool dequeueJob(unsigned int& rowStart, unsigned int& rowEnd) {
++    if (mJobs.empty()) return false;
++    auto it = mJobs.begin();
++    rowStart = std::get<0>(*it);
++    rowEnd = std::get<1>(*it);
++    mJobs.pop_front();
++    return true;
++  }
++  void enqueueJob(unsigned int rowStart, unsigned int rowEnd) {
++    mJobs.push_back(std::make_tuple(rowStart, rowEnd));
++  }
++  void markQueueForEnd() {}
++  void reset() { mJobs.clear(); }
++
++ private:
++  std::deque<std::tuple<unsigned int, unsigned int>> mJobs;
++};
++#endif
+ 
+ /*
+  * MessageWriter implementation for ALOG functions.
+@@ -136,7 +164,31 @@ class AlogMessageWriter : public MessageWriter {
+   }
+ };
+ 
++#ifdef UHDR_NO_THREADS
++unsigned int GetCPUCoreCount() { return 1u; }
++#else
+ unsigned int GetCPUCoreCount() { return (std::max)(1u, std::thread::hardware_concurrency()); }
++#endif
++
++#ifndef UHDR_NO_THREADS
++using WorkerThread = std::thread;
++template <class Fn>
++void StartWorkers(int threads, const Fn& fn, std::vector<WorkerThread>& workers) {
++  for (int th = 0; th < threads - 1; th++) {
++    workers.emplace_back(fn);
++  }
++}
++template <class WorkerVec>
++void JoinWorkers(WorkerVec& workers) {
++  std::for_each(workers.begin(), workers.end(), [](std::thread& t) { t.join(); });
++}
++#else
++struct WorkerThread {};
++template <class Fn>
++void StartWorkers(int /*threads*/, const Fn& /*fn*/, std::vector<WorkerThread>& /*workers*/) {}
++template <class WorkerVec>
++void JoinWorkers(WorkerVec& /*workers*/) {}
++#endif
+ 
+ JpegR::JpegR(void* uhdrGLESCtxt, int mapDimensionScaleFactor, int mapCompressQuality,
+              bool useMultiChannelGainMap, float gamma, uhdr_enc_preset_t preset,
+@@ -818,10 +870,8 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+     };
+ 
+     // generate map
+-    std::vector<std::thread> workers;
+-    for (int th = 0; th < threads - 1; th++) {
+-      workers.push_back(std::thread(generateMap));
+-    }
++    std::vector<WorkerThread> workers;
++    StartWorkers(threads, generateMap, workers);
+ 
+     for (unsigned int rowStart = 0; rowStart < map_height;) {
+       unsigned int rowEnd = (std::min)(rowStart + rowStep, map_height);
+@@ -830,7 +880,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+     }
+     jobQueue.markQueueForEnd();
+     generateMap();
+-    std::for_each(workers.begin(), workers.end(), [](std::thread& t) { t.join(); });
++    JoinWorkers(workers);
+   };
+ 
+   auto generateGainMapTwoPass = [this, sdr_intent, hdr_intent, gainmap_metadata, dest, map_width,
+@@ -843,7 +893,9 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+     float* gainmap_data = reinterpret_cast<float*>(gainmap_mem.m_buffer.get());
+     float gainmap_min[3] = {127.0f, 127.0f, 127.0f};
+     float gainmap_max[3] = {-128.0f, -128.0f, -128.0f};
++#ifndef UHDR_NO_THREADS
+     std::mutex gainmap_minmax;
++#endif
+ 
+     const int threads = (std::min)(GetCPUCoreCount(), 4u);
+     const int jobSizeInRows = 1;
+@@ -853,7 +905,11 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+         [this, sdr_intent, hdr_intent, gainmap_data, map_width, hdrInvOetf, hdrLuminanceFn,
+          hdrOotfFn, hdrGamutConversionFn, sdrGamutConversionFn, luminanceFn, sdrYuvToRgbFn,
+          hdrYuvToRgbFn, sdr_sample_pixel_fn, hdr_sample_pixel_fn, hdr_white_nits, use_luminance,
+-         &gainmap_min, &gainmap_max, &gainmap_minmax, &jobQueue]() -> void {
++         &gainmap_min, &gainmap_max,
++#if !defined(UHDR_NO_THREADS)
++         &gainmap_minmax,
++#endif
++         &jobQueue]() -> void {
+       unsigned int rowStart, rowEnd;
+       const bool isHdrIntentRgb = isPixelFormatRgb(hdr_intent->fmt);
+       const bool isSdrIntentRgb = isPixelFormatRgb(sdr_intent->fmt);
+@@ -928,6 +984,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+           }
+         }
+       }
++#if !defined(UHDR_NO_THREADS)
+       {
+         std::unique_lock<std::mutex> lock{gainmap_minmax};
+         for (int index = 0; index < (mUseMultiChannelGainMap ? 3 : 1); index++) {
+@@ -935,13 +992,17 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+           gainmap_max[index] = (std::max)(gainmap_max[index], gainmap_max_th[index]);
+         }
+       }
++#else
++      for (int index = 0; index < (mUseMultiChannelGainMap ? 3 : 1); index++) {
++        gainmap_min[index] = (std::min)(gainmap_min[index], gainmap_min_th[index]);
++        gainmap_max[index] = (std::max)(gainmap_max[index], gainmap_max_th[index]);
++      }
++#endif
+     };
+ 
+     // generate map
+-    std::vector<std::thread> workers;
+-    for (int th = 0; th < threads - 1; th++) {
+-      workers.push_back(std::thread(generateMap));
+-    }
++    std::vector<WorkerThread> workers;
++    StartWorkers(threads, generateMap, workers);
+ 
+     for (unsigned int rowStart = 0; rowStart < map_height;) {
+       unsigned int rowEnd = (std::min)(rowStart + rowStep, map_height);
+@@ -950,7 +1011,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+     }
+     jobQueue.markQueueForEnd();
+     generateMap();
+-    std::for_each(workers.begin(), workers.end(), [](std::thread& t) { t.join(); });
++    JoinWorkers(workers);
+ 
+     // xmp metadata current implementation does not support writing multichannel metadata
+     // so merge them in to one
+@@ -1015,9 +1076,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+     workers.clear();
+     jobQueue.reset();
+     rowStep = threads == 1 ? map_height : 1;
+-    for (int th = 0; th < threads - 1; th++) {
+-      workers.push_back(std::thread(encodeMap));
+-    }
++    StartWorkers(threads, encodeMap, workers);
+     for (unsigned int rowStart = 0; rowStart < map_height;) {
+       unsigned int rowEnd = (std::min)(rowStart + rowStep, map_height);
+       jobQueue.enqueueJob(rowStart, rowEnd);
+@@ -1025,7 +1084,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+     }
+     jobQueue.markQueueForEnd();
+     encodeMap();
+-    std::for_each(workers.begin(), workers.end(), [](std::thread& t) { t.join(); });
++    JoinWorkers(workers);
+ 
+     if (mUseMultiChannelGainMap) {
+       for (int i = 0; i < 3; i++) {
+@@ -1686,10 +1745,8 @@ uhdr_error_info_t JpegR::applyGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_ima
+   };
+ 
+   const int threads = (std::min)(GetCPUCoreCount(), 4u);
+-  std::vector<std::thread> workers;
+-  for (int th = 0; th < threads - 1; th++) {
+-    workers.push_back(std::thread(applyRecMap));
+-  }
++  std::vector<WorkerThread> workers;
++  StartWorkers(threads, applyRecMap, workers);
+   const unsigned int rowStep = threads == 1 ? sdr_intent->h : map_scale_factor_rnd;
+   for (unsigned int rowStart = 0; rowStart < sdr_intent->h;) {
+     unsigned int rowEnd = (std::min)(rowStart + rowStep, sdr_intent->h);
+@@ -1698,7 +1755,7 @@ uhdr_error_info_t JpegR::applyGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_ima
+   }
+   jobQueue.markQueueForEnd();
+   applyRecMap();
+-  std::for_each(workers.begin(), workers.end(), [](std::thread& t) { t.join(); });
++  JoinWorkers(workers);
+ 
+   return g_no_error;
+ }
+@@ -2076,10 +2133,8 @@ uhdr_error_info_t JpegR::toneMap(uhdr_raw_image_t* hdr_intent, uhdr_raw_image_t*
+   };
+ 
+   // tone map
+-  std::vector<std::thread> workers;
+-  for (int th = 0; th < threads - 1; th++) {
+-    workers.push_back(std::thread(toneMapInternal));
+-  }
++  std::vector<WorkerThread> workers;
++  StartWorkers(threads, toneMapInternal, workers);
+ 
+   for (unsigned int rowStart = 0; rowStart < height;) {
+     unsigned int rowEnd = (std::min)(rowStart + rowStep, height);
+@@ -2088,7 +2143,7 @@ uhdr_error_info_t JpegR::toneMap(uhdr_raw_image_t* hdr_intent, uhdr_raw_image_t*
+   }
+   jobQueue.markQueueForEnd();
+   toneMapInternal();
+-  std::for_each(workers.begin(), workers.end(), [](std::thread& t) { t.join(); });
++  JoinWorkers(workers);
+ 
+   return g_no_error;
+ }
+-- 
+2.39.5

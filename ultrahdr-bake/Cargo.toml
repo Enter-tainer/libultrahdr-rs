@@ -6,6 +6,14 @@ description = "Bake HDR intent + SDR base into an UltraHDR JPEG (CLI)"
 license = "Apache-2.0"
 publish = false
 
+[features]
+default = ["vendored", "iso21496"]
+vendored = ["ultrahdr/vendored"]
+shared = ["ultrahdr/shared"]
+gles = ["ultrahdr/gles"]
+iso21496 = ["ultrahdr/iso21496"]
+no-threads = ["ultrahdr/no-threads"]
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }

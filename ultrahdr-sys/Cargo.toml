@@ -17,6 +17,8 @@ shared = []
 gles = []
 # Enable writing ISO/TS 21496-1 gain map metadata.
 iso21496 = []
+# Disable std::thread usage in upstream build (single-threaded).
+no-threads = []
 
 [dependencies]
 

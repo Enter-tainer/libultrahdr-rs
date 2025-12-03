@@ -1,5 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn locate_src_dir(manifest_dir: &Path) -> PathBuf {
     if let Ok(env) = env::var("ULTRAHDR_SRC_DIR") {
@@ -23,6 +24,53 @@ fn locate_src_dir(manifest_dir: &Path) -> PathBuf {
     sibling
 }
 
+fn apply_patch_once(src_dir: &Path, patch_path: &Path) {
+    if !patch_path.is_file() {
+        return;
+    }
+
+    let patch_str = patch_path
+        .to_str()
+        .expect("patch path contains non-UTF8 characters");
+
+    // If patch applies in reverse, assume already applied.
+    let reverse_ok = Command::new("git")
+        .current_dir(src_dir)
+        .args(["apply", "--reverse", "--check", patch_str])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if reverse_ok {
+        return;
+    }
+
+    let status = Command::new("git")
+        .current_dir(src_dir)
+        .args(["apply", "--whitespace=nowarn", patch_str])
+        .status()
+        .expect("failed to execute git apply");
+    if !status.success() {
+        panic!(
+            "failed to apply patch {} in {}",
+            patch_path.display(),
+            src_dir.display()
+        );
+    }
+}
+
+fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
+    if env::var("ULTRAHDR_SKIP_PATCHES").is_ok() {
+        return;
+    }
+    let workspace_root = manifest_dir
+        .parent()
+        .expect("ultrahdr-sys has no parent dir");
+    apply_patch_once(
+        src_dir,
+        &workspace_root.join("patches/libultrahdr-no-threads.patch"),
+    );
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let src_dir = locate_src_dir(&manifest_dir);
@@ -32,6 +80,12 @@ fn main() {
             src_dir.display()
         );
     }
+
+    let patch_path = manifest_dir
+        .parent()
+        .expect("ultrahdr-sys has no parent dir")
+        .join("patches/libultrahdr-no-threads.patch");
+    apply_local_patches(&manifest_dir, &src_dir);
 
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release")
@@ -70,6 +124,9 @@ fn main() {
             "OFF"
         },
     );
+    if cfg!(feature = "no-threads") {
+        cfg.define("UHDR_DISABLE_THREADS", "ON");
+    }
 
     // Build only the main library target; install target is disabled upstream.
     let cmake_target = if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc"
@@ -148,6 +205,7 @@ fn main() {
         "cargo:rerun-if-changed={}",
         src_dir.join("ultrahdr_api.h").display()
     );
+    println!("cargo:rerun-if-changed={}", patch_path.display());
 
     let bindings = bindgen::Builder::default()
         .header(src_dir.join("ultrahdr_api.h").to_string_lossy())
