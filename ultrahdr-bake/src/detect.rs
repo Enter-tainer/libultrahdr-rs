@@ -110,11 +110,20 @@ fn resolve_by_original_id(seed: &Path) -> Result<InputPair> {
             );
             auto_detect_pair(seed, &mate)
         }
-        _ => bail!(
-            "Multiple siblings share OriginalDocumentID ({}) with {}. Please specify --hdr/--sdr explicitly.",
-            seed_doc_id,
-            seed.display()
-        ),
+        _ => {
+            let mut siblings: Vec<String> = matches
+                .into_iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            siblings.sort();
+            siblings.dedup();
+            bail!(
+                "Multiple siblings share OriginalDocumentID ({}) with {}:\n{}\nPlease specify --hdr/--sdr explicitly.",
+                seed_doc_id,
+                seed.display(),
+                siblings.join("\n")
+            )
+        }
     }
 }
 
