@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
-use ultrahdr::{sys, CompressedImage, Decoder, Encoder, ImgFormat, ImgLabel, RawImage};
+use ultrahdr::{CompressedImage, Decoder, Encoder, ImgFormat, ImgLabel, RawImage, sys};
 
 #[derive(Debug, Parser)]
 #[command(about = "Rust port of ultrahdr_app: encode/decode UltraHDR streams")]

@@ -1,11 +1,11 @@
 use std::fs;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bytes::{Bytes, BytesMut};
-use img_parts::jpeg::{markers, Jpeg, JpegSegment};
+use img_parts::jpeg::{Jpeg, JpegSegment, markers};
 use quick_xml::{
-    events::{BytesEnd, BytesStart, Event},
     Reader, Writer,
+    events::{BytesEnd, BytesStart, Event},
 };
 
 use crate::cli::MotionArgs;
@@ -411,10 +411,10 @@ fn find_mpf_offset_bytes(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|w| w == b"MPF\0")
 }
 fn build_motion_xmp(existing: Option<&[u8]>, meta: &MotionMeta) -> Result<Vec<u8>> {
-    if let Some(existing) = existing {
-        if let Ok(merged) = merge_into_existing_xmp(existing, meta) {
-            return Ok(merged);
-        }
+    if let Some(existing) = existing
+        && let Ok(merged) = merge_into_existing_xmp(existing, meta)
+    {
+        return Ok(merged);
     }
     Ok(build_fresh_xmp(meta))
 }

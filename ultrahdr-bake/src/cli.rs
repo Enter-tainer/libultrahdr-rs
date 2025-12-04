@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{builder::ValueHint, Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, builder::ValueHint};
 
 /// Command-line arguments for ultrahdr-bake.
 #[derive(Parser, Debug, Clone)]

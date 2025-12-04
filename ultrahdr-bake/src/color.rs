@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use img_parts::{jpeg::Jpeg, ImageICC};
+use img_parts::{ImageICC, jpeg::Jpeg};
 use ultrahdr::sys;
 
 const MATCH_TOLERANCE: f32 = 0.005;

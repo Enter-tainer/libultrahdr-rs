@@ -48,11 +48,7 @@ pub(crate) fn check(info: sys::uhdr_error_info_t) -> Result<()> {
         let s = unsafe { CStr::from_ptr(info.detail.as_ptr()) }
             .to_string_lossy()
             .into_owned();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        if s.is_empty() { None } else { Some(s) }
     } else {
         None
     };

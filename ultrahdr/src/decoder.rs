@@ -1,4 +1,4 @@
-use crate::error::{check, Error, Result};
+use crate::error::{Error, Result, check};
 use crate::sys;
 use crate::types::{ColorTransfer, CompressedImage, DecodedPackedView, GainMapMetadata, ImgFormat};
 use std::ptr::NonNull;

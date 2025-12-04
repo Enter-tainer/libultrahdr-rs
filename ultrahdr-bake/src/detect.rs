@@ -4,9 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use memchr::memmem;
-use ultrahdr::{sys, CompressedImage, Decoder, Error, GainMapMetadata};
+use ultrahdr::{CompressedImage, Decoder, Error, GainMapMetadata, sys};
 
 // Tunable knobs for XMP scanning. Bump these if your XMP lives deeper in the file.
 const XMP_SCAN_LIMIT_BYTES: usize = 256 * 1024;
@@ -87,10 +87,10 @@ fn resolve_by_original_id(seed: &Path) -> Result<InputPair> {
         if !same_ext {
             continue;
         }
-        if let Some(doc_id) = original_document_id(&path)? {
-            if doc_id == seed_doc_id {
-                matches.push(path);
-            }
+        if let Some(doc_id) = original_document_id(&path)?
+            && doc_id == seed_doc_id
+        {
+            matches.push(path);
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::error::{check, Error, Result};
+use crate::error::{Error, Result, check};
 use crate::sys;
 use crate::types::{
     Codec, CompressedImage, DecodedPackedView, EncPreset, EncodedView, ImgLabel, OwnedPackedImage,

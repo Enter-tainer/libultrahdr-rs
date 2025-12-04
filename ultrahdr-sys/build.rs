@@ -40,11 +40,10 @@ fn locate_src_dir(manifest_dir: &Path) -> PathBuf {
     }
 
     // Fallback: sibling checkout (old layout).
-    let sibling = workspace_root
+    workspace_root
         .parent()
         .expect("workspace has no parent dir")
-        .join("libultrahdr");
-    sibling
+        .join("libultrahdr")
 }
 
 fn apply_patch_once(src_dir: &Path, patch_path: &Path) {
@@ -294,11 +293,8 @@ fn main() {
             .allowlist_type("uhdr_.*")
             .allowlist_var("UHDR_.*");
     }
-    if !is_wasm {
-        if let Some((_, prefix)) = &wasi {
-            bindings =
-                bindings.clang_arg(format!("--sysroot={}/share/wasi-sysroot", prefix.display()));
-        }
+    if !is_wasm && let Some((_, prefix)) = &wasi {
+        bindings = bindings.clang_arg(format!("--sysroot={}/share/wasi-sysroot", prefix.display()));
     }
     let bindings = bindings.generate().expect("bindgen failed");
 
@@ -306,12 +302,10 @@ fn main() {
     bindings
         .write_to_file(&bindings_path)
         .expect("failed to write bindings");
-    if is_wasm {
-        if let Ok(content) = fs::read_to_string(&bindings_path) {
-            let fn_count = content.matches("pub fn ").count();
-            if fn_count == 0 {
-                println!("cargo:warning=bindgen generated 0 functions for wasm target");
-            }
+    if is_wasm && let Ok(content) = fs::read_to_string(&bindings_path) {
+        let fn_count = content.matches("pub fn ").count();
+        if fn_count == 0 {
+            println!("cargo:warning=bindgen generated 0 functions for wasm target");
         }
     }
 }

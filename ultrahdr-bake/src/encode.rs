@@ -1,7 +1,7 @@
 use std::fs;
 
-use anyhow::{ensure, Context, Result};
-use ultrahdr::{sys, CompressedImage, Decoder, Encoder, ImgLabel};
+use anyhow::{Context, Result, ensure};
+use ultrahdr::{CompressedImage, Decoder, Encoder, ImgLabel, sys};
 
 use crate::color::{detect_icc_color_gamut, gamut_label};
 use crate::detect::probe_gainmap_metadata;
