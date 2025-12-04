@@ -7,6 +7,7 @@ Rust bindings for Google's UltraHDR gain-map JPEG library with a small CLI. / �
 - `ultrahdr`: safe-ish wrapper around the FFI types plus helpers for gain map metadata, packed buffers, and error handling. / `ultrahdr`：封装 FFI，提供增益图元数据、打包缓冲区和错误处理辅助。
 - `ultrahdr-bake`: CLI that bakes an UltraHDR JPEG from an HDR (gain map) JPEG + SDR base JPEG, and can assemble Motion Photos (JPEG + MP4). / `ultrahdr-bake`：将 HDR（增益图）JPEG 与 SDR 基础 JPEG 合成为 UltraHDR JPEG，并可组装 Motion Photo（JPEG + MP4）。
 - Upstream sources live in the `libultrahdr` submodule (Apache-2.0). / 上游源码存放在 `libultrahdr` 子模块（Apache-2.0）。
+- `ultrahdr-browser`: Vite/React demo that runs `ultrahdr-bake` via WASI in the browser; / `ultrahdr-browser`：基于 Vite/React 的浏览器演示，通过 WASI 运行 `ultrahdr-bake`
 
 ## Repository layout / 目录结构
 - `ultrahdr-sys/`: build script, bindgen output, and generated `sys` APIs. / `ultrahdr-sys/`：构建脚本、bindgen 输出与底层 `sys` 接口。
@@ -41,8 +42,15 @@ target/release/ultrahdr-bake motion \
   --video clip.mp4 \
   --timestamp-us 0 \
   --out motionphoto.jpg
+
+# Build the browser demo (wasm + Vite/React)
+pnpm --dir ultrahdr-browser install --frozen-lockfile
+pnpm --dir ultrahdr-browser build
 ```
 使用默认特性构建 CLI 并编码 UltraHDR 的示例如上。
+
+Browser demo: deploys under root by default; GitHub Pages build sets `VITE_BASE_PATH=/libultrahdr-rs/`. The wasm (`ultrahdr-bake.wasm`) is fetched relative to `import.meta.env.BASE_URL`. /
+浏览器演示：默认以根路径部署；在 GitHub Pages 上构建时使用 `VITE_BASE_PATH=/libultrahdr-rs/`，WASM（`ultrahdr-bake.wasm`）从 `import.meta.env.BASE_URL` 相对路径加载。
 
 ## Library usage / 库用法示例
 ```rust
