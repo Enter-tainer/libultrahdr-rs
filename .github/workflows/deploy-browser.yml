@@ -14,6 +14,9 @@ concurrency:
   group: "pages"
   cancel-in-progress: false
 
+env:
+  WASI_VERSION: "29.0"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,49 +29,57 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            ninja-build \
-            nasm \
-            pkg-config
+          sudo apt-get install -y cmake ninja-build nasm pkg-config curl
 
       - name: Install Rust (with wasm32-wasip1 target)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
 
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/wasm32-wasip1
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: ultrahdr-browser/pnpm-lock.yaml
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
+      - name: Cache pnpm store
+        uses: actions/cache@v4
         with:
-          version: 10
+          path: ~/.pnpm-store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('ultrahdr-browser/pnpm-lock.yaml') }}
 
       - name: Download WASI SDK
         run: |
           set -euo pipefail
-          WASI_SDK_VERSION="29.0"
-          WASI_SDK_PREFIX="$RUNNER_TEMP/wasi-sdk-29.0"
-          echo "WASI_SDK_PREFIX=$WASI_SDK_PREFIX" >> "$GITHUB_ENV"
-
-          sdk_url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sdk-29.0-x86_64-linux.tar.gz"
-          sysroot_url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sysroot-29.0.tar.gz"
-
-          echo "Fetching ${sdk_url}"
-          curl -fL --retry 3 --continue-at - -o "$RUNNER_TEMP/wasi-sdk.tar.gz" "$sdk_url"
+          prefix="$RUNNER_TEMP/wasi-sdk-${WASI_VERSION}"
+          tarball="wasi-sdk-${WASI_VERSION}-x86_64-linux.tar.gz"
+          url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/${tarball}"
+          echo "Downloading ${url}"
+          curl -fL --retry 3 --continue-at - -o "$RUNNER_TEMP/wasi-sdk.tar.gz" "$url"
           tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$RUNNER_TEMP"
-
-          echo "Fetching ${sysroot_url}"
-          mkdir -p "$WASI_SDK_PREFIX/share"
-          curl -fL --retry 3 --continue-at - -o "$RUNNER_TEMP/wasi-sysroot.tar.gz" "$sysroot_url"
-          tar -xzf "$RUNNER_TEMP/wasi-sysroot.tar.gz" -C "$WASI_SDK_PREFIX/share"
+          echo "WASI_SDK_PREFIX=$prefix" >> "$GITHUB_ENV"
+          echo "WASI_SDK_TOOLCHAIN_FILE=$prefix/share/cmake/wasi-sdk-p1.cmake" >> "$GITHUB_ENV"
+          ls -1 "$prefix/share/cmake/"
 
       - name: Build ultrahdr-bake (wasm32-wasip1)
         env:
           WASI_SDK_PREFIX: ${{ env.WASI_SDK_PREFIX }}
+          WASI_SDK_TOOLCHAIN_FILE: ${{ env.WASI_SDK_TOOLCHAIN_FILE }}
         run: cargo build --target wasm32-wasip1 -p ultrahdr-bake --release
 
       - name: Install frontend deps
