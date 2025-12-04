@@ -14,10 +14,6 @@ concurrency:
   group: "pages"
   cancel-in-progress: false
 
-env:
-  WASI_VERSION: "29.0"
-  WASI_TAG: "29"
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,16 +33,15 @@ jobs:
         with:
           targets: wasm32-wasip1
 
-      - name: Download WASI SDK ${{ env.WASI_VERSION }}
+      - name: Download WASI SDK
         run: |
           set -euo pipefail
-          tarball="wasi-sdk-${WASI_VERSION}-x86_64-linux.tar.gz"
-          url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_TAG}/${tarball}"
+          tarball="wasi-sdk-29.0-x86_64-linux.tar.gz"
+          url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/${tarball}"
           echo "Downloading ${url}"
           curl -fL --retry 3 --continue-at - -o "$RUNNER_TEMP/wasi-sdk.tar.gz" "$url"
           tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$RUNNER_TEMP"
-          extracted_dir="$(tar -tzf "$RUNNER_TEMP/wasi-sdk.tar.gz" | head -1 | cut -d/ -f1)"
-          prefix="$RUNNER_TEMP/$extracted_dir"
+          prefix="$RUNNER_TEMP/wasi-sdk-29.0-x86_64-linux/"
           echo "WASI_SDK_PREFIX=$prefix" >> "$GITHUB_ENV"
           echo "WASI_SDK_TOOLCHAIN_FILE=$prefix/share/cmake/wasi-sdk-p1.cmake" >> "$GITHUB_ENV"
           ls -1 "$prefix/share/cmake/" || (echo "Extracted to $prefix, contents:" && ls -la "$prefix")
