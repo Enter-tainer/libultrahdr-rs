@@ -1,9 +1,14 @@
 [package]
 name = "ultrahdr-bake"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Bake HDR intent + SDR base into an UltraHDR JPEG (CLI)"
-license = "Apache-2.0"
 publish = false
 
 [features]
@@ -15,10 +20,10 @@ iso21496 = ["ultrahdr/iso21496"]
 no-threads = ["ultrahdr/no-threads"]
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4.5", features = ["derive"] }
 ultrahdr = { path = "../ultrahdr" }
-memchr = "2"
-bytes = "1"
-img-parts = "0.4"
-quick-xml = "0.38.4"
+anyhow.workspace = true
+clap.workspace = true
+memchr.workspace = true
+bytes.workspace = true
+img-parts.workspace = true
+quick-xml.workspace = true

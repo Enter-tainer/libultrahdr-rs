@@ -1,9 +1,14 @@
 [package]
 name = "ultrahdr"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Safe-ish Rust wrapper around libultrahdr"
-license = "Apache-2.0"
 
 [features]
 default = ["vendored", "iso21496"]
@@ -17,5 +22,5 @@ no-threads = ["ultrahdr-sys/no-threads"]
 ultrahdr-sys = { path = "../ultrahdr-sys" }
 
 [dev-dependencies]
-anyhow = "1"
-clap = { version = "4.5", features = ["derive"] }
+anyhow.workspace = true
+clap.workspace = true

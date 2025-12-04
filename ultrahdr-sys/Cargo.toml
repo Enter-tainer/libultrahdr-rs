@@ -1,11 +1,16 @@
 [package]
 name = "ultrahdr-sys"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 links = "uhdr"
 build = "build.rs"
 description = "Raw FFI bindings to libultrahdr"
-license = "Apache-2.0"
 
 [features]
 default = ["vendored", "iso21496"]
@@ -23,8 +28,8 @@ no-threads = []
 [dependencies]
 
 [build-dependencies]
-bindgen = "0.69"
-cmake = "0.1"
+bindgen.workspace = true
+cmake.workspace = true
 
 [package.metadata.docs.rs]
 features = ["vendored", "iso21496"]

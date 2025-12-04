@@ -3,4 +3,21 @@ members = ["ultrahdr-sys", "ultrahdr", "ultrahdr-bake"]
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/Enter-tainer/libultrahdr-rs"
+homepage = "https://github.com/Enter-tainer/libultrahdr-rs"
+keywords = ["hdr", "jpeg", "gainmap", "image"]
+categories = ["multimedia::images", "external-ffi-bindings"]
+
+[workspace.dependencies]
+anyhow = "1"
+bindgen = "0.72"
+bytes = "1"
+clap = { version = "4.5", features = ["derive"] }
+cmake = "0.1"
+img-parts = "0.4"
+memchr = "2"
+quick-xml = "0.38.4"
