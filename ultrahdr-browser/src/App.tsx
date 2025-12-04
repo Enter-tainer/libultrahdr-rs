@@ -144,6 +144,24 @@ export default function App() {
           <p className="text-slate-400">{t("headerSubtitle")}</p>
         </div>
         <div className="flex flex-col gap-2 md:items-end">
+          <a
+            href="https://github.com/Enter-tainer/libultrahdr-rs"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-fit items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 hover:border-slate-700 hover:bg-slate-800"
+            title="Open repository in GitHub"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              className="h-4 w-4"
+              aria-hidden
+            >
+              <path d="M12 .5a12 12 0 0 0-3.79 23.4c.6.11.82-.26.82-.58v-2.1c-3.34.73-4.04-1.61-4.04-1.61-.55-1.4-1.35-1.77-1.35-1.77-1.1-.76.08-.74.08-.74 1.22.09 1.86 1.25 1.86 1.25 1.08 1.85 2.83 1.32 3.52 1 .11-.78.42-1.32.76-1.62-2.66-.31-5.46-1.33-5.46-5.9 0-1.3.47-2.36 1.24-3.19-.12-.31-.54-1.55.12-3.22 0 0 1-.32 3.3 1.22a11.5 11.5 0 0 1 6 0c2.3-1.54 3.29-1.22 3.29-1.22.66 1.67.24 2.9.12 3.22.78.83 1.23 1.9 1.23 3.2 0 4.59-2.8 5.58-5.47 5.88.43.36.81 1.08.81 2.17v3.22c0 .32.21.7.82.58A12 12 0 0 0 12 .5Z" />
+            </svg>
+            {t("repoLink")}
+          </a>
           <div className="flex items-center gap-2">
             <Label className="text-slate-300">{t("languageLabel")}</Label>
             <Select
@@ -188,7 +206,7 @@ export default function App() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
-                <Label className="flex items-center gap-2">
+                <Label className="flex items-center gap-2" title={t("tooltipInputA")}>
                   <Upload className="h-4 w-4" /> {t("inputA")}
                 </Label>
                 <Input
@@ -203,7 +221,7 @@ export default function App() {
                     }
                   }}
                 />
-                <Label className="flex items-center gap-2">
+                <Label className="flex items-center gap-2" title={t("tooltipInputB")}>
                   <Upload className="h-4 w-4" /> {t("inputB")}
                 </Label>
                 <Input
@@ -236,7 +254,7 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label>{t("baseQuality")}</Label>
+                    <Label title={t("tooltipBaseQuality")}>{t("baseQuality")}</Label>
                     <Input
                       type="number"
                       min={1}
@@ -248,7 +266,7 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <Label>{t("gainmapQuality")}</Label>
+                    <Label title={t("tooltipGainmapQuality")}>{t("gainmapQuality")}</Label>
                     <Input
                       type="number"
                       min={1}
@@ -260,18 +278,22 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <Label>{t("scale")}</Label>
+                    <Label title={t("tooltipScale")}>{t("scale")}</Label>
                     <Input
                       type="number"
                       min={1}
+                      step={1}
                       value={bakeInputs.scale}
                       onChange={(e) =>
-                        setBakeInputs((s) => ({ ...s, scale: Number(e.target.value || 1) }))
+                        setBakeInputs((s) => ({
+                          ...s,
+                          scale: Number(e.target.value || 1),
+                        }))
                       }
                     />
                   </div>
                   <div>
-                    <Label>{t("targetPeak")}</Label>
+                    <Label title={t("tooltipTargetPeak")}>{t("targetPeak")}</Label>
                     <Input
                       type="number"
                       placeholder={t("targetPeakPlaceholder")}
@@ -291,7 +313,9 @@ export default function App() {
                       }
                       className="h-4 w-4 rounded border-slate-600 bg-slate-900"
                     />
-                    <Label htmlFor="mc">{t("multichannel")}</Label>
+                    <Label htmlFor="mc" title={t("tooltipMultichannel")}>
+                      {t("multichannel")}
+                    </Label>
                   </div>
                 </div>
               </div>
@@ -338,7 +362,7 @@ export default function App() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
-                <Label className="flex items-center gap-2">
+                <Label className="flex items-center gap-2" title={t("tooltipMotionPhoto")}>
                   <Upload className="h-4 w-4" /> {t("motionPhoto")}
                 </Label>
                 <Input
@@ -348,7 +372,7 @@ export default function App() {
                     setMotionInputs((s) => ({ ...s, photo: e.target.files?.[0] || null }))
                   }
                 />
-                <Label className="flex items-center gap-2">
+                <Label className="flex items-center gap-2" title={t("tooltipMotionVideo")}>
                   <Upload className="h-4 w-4" /> {t("motionVideo")}
                 </Label>
                 <Input
@@ -359,7 +383,7 @@ export default function App() {
                   }
                 />
                 <div>
-                  <Label>{t("timestamp")}</Label>
+                  <Label title={t("tooltipTimestamp")}>{t("timestamp")}</Label>
                   <Input
                     type="number"
                     placeholder={t("timestampPlaceholder")}
