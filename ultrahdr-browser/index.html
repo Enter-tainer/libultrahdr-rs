@@ -4,37 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>UltraHDR Browser Demo</title>
-    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="/src/index.css" />
   </head>
-  <body>
-    <main class="shell">
-      <h1>UltraHDR Bake (WASI)</h1>
-      <p class="lede">
-        Upload two JPEGs (HDR with gain map + SDR base). Everything runs locally in your browser
-        using <code>@bjorn3/browser_wasi_shim</code> and the <code>ultrahdr-bake</code> WASI binary.
-      </p>
-
-      <section class="inputs">
-        <label class="file">
-          HDR / UltraHDR JPEG
-          <input id="hdr-file" type="file" accept="image/jpeg" />
-        </label>
-        <label class="file">
-          SDR base JPEG
-          <input id="sdr-file" type="file" accept="image/jpeg" />
-        </label>
-      </section>
-
-      <button id="run-btn">Bake UltraHDR</button>
-      <p id="status" class="status"></p>
-
-      <section id="result" class="result hidden">
-        <p>Done! Download or preview the baked UltraHDR:</p>
-        <a id="download-link" class="download" download="ultrahdr_bake_out.jpg">Download JPEG</a>
-        <img id="preview-img" alt="UltraHDR output preview" />
-      </section>
-    </main>
-
-    <script type="module" src="/src/main.js"></script>
+  <body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
