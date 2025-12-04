@@ -18,10 +18,10 @@ function writeFile(path: string, data: Uint8Array) {
   rootDir.contents.set(path, new File(data, { readonly: false }));
 }
 
-function readFile(path: string) {
+function readFile(path: string): Uint8Array | null {
   const entry = rootDir.contents.get(path);
   if (!entry || !(entry instanceof File)) return null;
-  return entry.data;
+  return entry.data as Uint8Array;
 }
 
 function emit(msg: WorkerStatus) {
@@ -81,16 +81,23 @@ async function runMotion(req: Extract<WorkerRequest, { type: "motion" }>) {
 async function runCli(args: string[], outName: string) {
   const fds = [
     new OpenFile(new File(new Uint8Array())),
-    ConsoleStdout.lineBuffered((line) => emit({ type: "stdout", payload: line })),
-    ConsoleStdout.lineBuffered((line) => emit({ type: "stderr", payload: line })),
+    ConsoleStdout.lineBuffered((line) =>
+      emit({ type: "stdout", payload: line }),
+    ),
+    ConsoleStdout.lineBuffered((line) =>
+      emit({ type: "stderr", payload: line }),
+    ),
     new PreopenDirectory("", rootDir.contents),
   ];
   const wasi = new WASI(args, [], fds, {});
 
   emit({ type: "status", payload: "Fetching wasm…" });
+  const baseOrigin =
+    (self as unknown as { location?: Location }).location?.origin ||
+    "http://localhost";
   const wasmUrl = new URL(
     `${import.meta.env.BASE_URL || "/"}ultrahdr-bake.wasm`,
-    self.location?.origin || self.location
+    baseOrigin,
   ).toString();
   const wasmBytes = await fetch(wasmUrl).then((r) => r.arrayBuffer());
 
@@ -104,23 +111,36 @@ async function runCli(args: string[], outName: string) {
       },
     },
   });
-  wasi.start(instance);
+  wasi.start(
+    instance as unknown as {
+      exports: { memory: WebAssembly.Memory; _start: () => unknown };
+    },
+  );
 
   const outBytes = readFile(outName);
   if (!outBytes) {
     throw new Error("Output file missing");
   }
+  const outCopy = new Uint8Array(outBytes.byteLength);
+  outCopy.set(outBytes);
   emit({
     type: "done",
-    payload: { fileName: outName, buffer: outBytes.buffer },
+    payload: {
+      fileName: outName,
+      buffer: outCopy.buffer,
+    },
   });
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const req = event.data;
   if (req.type === "bake") {
-    runBake(req).catch((err) => emit({ type: "error", payload: err.message || String(err) }));
+    runBake(req).catch((err) =>
+      emit({ type: "error", payload: err.message || String(err) }),
+    );
   } else if (req.type === "motion") {
-    runMotion(req).catch((err) => emit({ type: "error", payload: err.message || String(err) }));
+    runMotion(req).catch((err) =>
+      emit({ type: "error", payload: err.message || String(err) }),
+    );
   }
 };

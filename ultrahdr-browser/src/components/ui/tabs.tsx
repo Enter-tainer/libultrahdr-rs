@@ -25,12 +25,15 @@ export function Tabs({
   );
 }
 
-export function TabsList({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function TabsList({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn(
         "inline-flex items-center rounded-lg bg-slate-900 p-1 text-sm font-medium",
-        className
+        className,
       )}
       {...props}
     />
@@ -50,8 +53,10 @@ export function TabsTrigger({
       onClick={() => ctx.setActive(value)}
       className={cn(
         "inline-flex items-center rounded-md px-3 py-2 transition",
-        active ? "bg-primary text-primary-foreground" : "text-slate-300 hover:bg-slate-800",
-        className
+        active
+          ? "bg-primary text-primary-foreground"
+          : "text-slate-300 hover:bg-slate-800",
+        className,
       )}
     >
       {children}

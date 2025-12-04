@@ -1,7 +1,13 @@
 import React from "react";
 import { Upload, Wand2, Film } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "./components/ui/card";
 import { Label } from "./components/ui/label";
 import { Input } from "./components/ui/input";
 import { Button } from "./components/ui/button";
@@ -17,18 +23,28 @@ import {
 import type { WorkerStatus } from "./types/worker";
 
 type Mode = "bake" | "motion";
-type StatusEntry = { key?: TranslationKey; text?: string; params?: Record<string, string | number> };
+type StatusEntry = {
+  key?: TranslationKey;
+  text?: string;
+  params?: Record<string, string | number>;
+};
 
-const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+const worker = new Worker(new URL("./worker.ts", import.meta.url), {
+  type: "module",
+});
 
 export default function App() {
   const { t, translateStatus, lang, setLang } = useI18n();
   const [mode, setMode] = React.useState<Mode>("bake");
-  const [status, setStatus] = React.useState<StatusEntry>({ key: "statusIdle" });
+  const [status, setStatus] = React.useState<StatusEntry>({
+    key: "statusIdle",
+  });
   const [log, setLog] = React.useState<string[]>([]);
   const [outputUrl, setOutputUrl] = React.useState<string | null>(null);
   const [outputName, setOutputName] = React.useState<string | null>(null);
-  const [previews, setPreviews] = React.useState<{ a?: string; b?: string }>({});
+  const [previews, setPreviews] = React.useState<{ a?: string; b?: string }>(
+    {},
+  );
 
   const [bakeInputs, setBakeInputs] = React.useState({
     hdr: null as File | null,
@@ -46,7 +62,7 @@ export default function App() {
   });
   const resolvedStatus = React.useMemo(
     () => (status.key ? t(status.key, status.params) : status.text || ""),
-    [status, t]
+    [status, t],
   );
 
   React.useEffect(() => {
@@ -103,10 +119,12 @@ export default function App() {
           gainmapQ: bakeInputs.gainmapQ,
           scale: bakeInputs.scale,
           multichannel: bakeInputs.multichannel,
-          targetPeak: bakeInputs.targetPeak ? Number(bakeInputs.targetPeak) : undefined,
+          targetPeak: bakeInputs.targetPeak
+            ? Number(bakeInputs.targetPeak)
+            : undefined,
         },
       },
-      [hdrBuf, sdrBuf]
+      [hdrBuf, sdrBuf],
     );
   };
 
@@ -128,10 +146,12 @@ export default function App() {
         video: videoBuf,
         opts: {
           outName: "motionphoto.jpg",
-          timestampUs: motionInputs.timestampUs ? Number(motionInputs.timestampUs) : undefined,
+          timestampUs: motionInputs.timestampUs
+            ? Number(motionInputs.timestampUs)
+            : undefined,
         },
       },
-      [photoBuf, videoBuf]
+      [photoBuf, videoBuf],
     );
   };
 
@@ -139,8 +159,12 @@ export default function App() {
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-6 py-10">
       <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm uppercase tracking-[0.3em] text-slate-400">UltraHDR</p>
-          <h1 className="text-3xl font-semibold text-white">{t("headerTitle")}</h1>
+          <p className="text-sm uppercase tracking-[0.3em] text-slate-400">
+            UltraHDR
+          </p>
+          <h1 className="text-3xl font-semibold text-white">
+            {t("headerTitle")}
+          </h1>
           <p className="text-slate-400">{t("headerSubtitle")}</p>
         </div>
         <div className="flex flex-col gap-2 md:items-end">
@@ -206,7 +230,10 @@ export default function App() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
-                <Label className="flex items-center gap-2" title={t("tooltipInputA")}>
+                <Label
+                  className="flex items-center gap-2"
+                  title={t("tooltipInputA")}
+                >
                   <Upload className="h-4 w-4" /> {t("inputA")}
                 </Label>
                 <Input
@@ -221,7 +248,10 @@ export default function App() {
                     }
                   }}
                 />
-                <Label className="flex items-center gap-2" title={t("tooltipInputB")}>
+                <Label
+                  className="flex items-center gap-2"
+                  title={t("tooltipInputB")}
+                >
                   <Upload className="h-4 w-4" /> {t("inputB")}
                 </Label>
                 <Input
@@ -254,26 +284,36 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label title={t("tooltipBaseQuality")}>{t("baseQuality")}</Label>
+                    <Label title={t("tooltipBaseQuality")}>
+                      {t("baseQuality")}
+                    </Label>
                     <Input
                       type="number"
                       min={1}
                       max={100}
                       value={bakeInputs.baseQ}
                       onChange={(e) =>
-                        setBakeInputs((s) => ({ ...s, baseQ: Number(e.target.value || 95) }))
+                        setBakeInputs((s) => ({
+                          ...s,
+                          baseQ: Number(e.target.value || 95),
+                        }))
                       }
                     />
                   </div>
                   <div>
-                    <Label title={t("tooltipGainmapQuality")}>{t("gainmapQuality")}</Label>
+                    <Label title={t("tooltipGainmapQuality")}>
+                      {t("gainmapQuality")}
+                    </Label>
                     <Input
                       type="number"
                       min={1}
                       max={100}
                       value={bakeInputs.gainmapQ}
                       onChange={(e) =>
-                        setBakeInputs((s) => ({ ...s, gainmapQ: Number(e.target.value || 95) }))
+                        setBakeInputs((s) => ({
+                          ...s,
+                          gainmapQ: Number(e.target.value || 95),
+                        }))
                       }
                     />
                   </div>
@@ -293,13 +333,18 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <Label title={t("tooltipTargetPeak")}>{t("targetPeak")}</Label>
+                    <Label title={t("tooltipTargetPeak")}>
+                      {t("targetPeak")}
+                    </Label>
                     <Input
                       type="number"
                       placeholder={t("targetPeakPlaceholder")}
                       value={bakeInputs.targetPeak}
                       onChange={(e) =>
-                        setBakeInputs((s) => ({ ...s, targetPeak: e.target.value }))
+                        setBakeInputs((s) => ({
+                          ...s,
+                          targetPeak: e.target.value,
+                        }))
                       }
                     />
                   </div>
@@ -309,7 +354,10 @@ export default function App() {
                       type="checkbox"
                       checked={bakeInputs.multichannel}
                       onChange={(e) =>
-                        setBakeInputs((s) => ({ ...s, multichannel: e.target.checked }))
+                        setBakeInputs((s) => ({
+                          ...s,
+                          multichannel: e.target.checked,
+                        }))
                       }
                       className="h-4 w-4 rounded border-slate-600 bg-slate-900"
                     />
@@ -362,24 +410,36 @@ export default function App() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
-                <Label className="flex items-center gap-2" title={t("tooltipMotionPhoto")}>
+                <Label
+                  className="flex items-center gap-2"
+                  title={t("tooltipMotionPhoto")}
+                >
                   <Upload className="h-4 w-4" /> {t("motionPhoto")}
                 </Label>
                 <Input
                   type="file"
                   accept="image/jpeg"
                   onChange={(e) =>
-                    setMotionInputs((s) => ({ ...s, photo: e.target.files?.[0] || null }))
+                    setMotionInputs((s) => ({
+                      ...s,
+                      photo: e.target.files?.[0] || null,
+                    }))
                   }
                 />
-                <Label className="flex items-center gap-2" title={t("tooltipMotionVideo")}>
+                <Label
+                  className="flex items-center gap-2"
+                  title={t("tooltipMotionVideo")}
+                >
                   <Upload className="h-4 w-4" /> {t("motionVideo")}
                 </Label>
                 <Input
                   type="file"
                   accept="video/mp4"
                   onChange={(e) =>
-                    setMotionInputs((s) => ({ ...s, video: e.target.files?.[0] || null }))
+                    setMotionInputs((s) => ({
+                      ...s,
+                      video: e.target.files?.[0] || null,
+                    }))
                   }
                 />
                 <div>
@@ -389,7 +449,10 @@ export default function App() {
                     placeholder={t("timestampPlaceholder")}
                     value={motionInputs.timestampUs}
                     onChange={(e) =>
-                      setMotionInputs((s) => ({ ...s, timestampUs: e.target.value }))
+                      setMotionInputs((s) => ({
+                        ...s,
+                        timestampUs: e.target.value,
+                      }))
                     }
                   />
                 </div>

@@ -9,12 +9,12 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
       ref={ref}
       className={cn(
         "h-10 w-full rounded-lg border border-input bg-slate-900 px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        className
+        className,
       )}
       {...props}
     >
       {children}
     </select>
-  )
+  ),
 );
 Select.displayName = "Select";

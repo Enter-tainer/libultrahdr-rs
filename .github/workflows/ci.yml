@@ -124,5 +124,36 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ultrahdr-bake-${{ matrix.target }}
-          path: artifacts/${{ matrix.target }}
+      name: ultrahdr-bake-${{ matrix.target }}
+      path: artifacts/${{ matrix.target }}
+
+  frontend:
+    name: Frontend format & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+          cache-dependency-path: ultrahdr-browser/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ultrahdr-browser
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        working-directory: ultrahdr-browser
+        run: pnpm run format
+
+      - name: Type check
+        working-directory: ultrahdr-browser
+        run: pnpm run typecheck
