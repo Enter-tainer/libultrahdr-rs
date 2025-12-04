@@ -88,7 +88,11 @@ async function runCli(args: string[], outName: string) {
   const wasi = new WASI(args, [], fds, {});
 
   emit({ type: "status", payload: "Fetching wasm…" });
-  const wasmBytes = await fetch("/ultrahdr-bake.wasm").then((r) => r.arrayBuffer());
+  const wasmUrl = new URL(
+    `${import.meta.env.BASE_URL || "/"}ultrahdr-bake.wasm`,
+    self.location?.origin || self.location
+  ).toString();
+  const wasmBytes = await fetch(wasmUrl).then((r) => r.arrayBuffer());
 
   emit({ type: "status", payload: "Running ultrahdr-bake…" });
   const { instance } = await WebAssembly.instantiate(wasmBytes, {

@@ -70,6 +70,8 @@ jobs:
 
       - name: Build frontend (copies wasm)
         working-directory: ultrahdr-browser
+        env:
+          VITE_BASE_PATH: "/libultrahdr-rs/"
         run: pnpm build
 
       - name: Upload Pages artifact
