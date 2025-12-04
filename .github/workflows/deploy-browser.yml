@@ -16,6 +16,7 @@ concurrency:
 
 env:
   WASI_VERSION: "29.0"
+  WASI_TAG: "29"
 
 jobs:
   build:
@@ -41,7 +42,7 @@ jobs:
           set -euo pipefail
           prefix="$RUNNER_TEMP/wasi-sdk-${WASI_VERSION}"
           tarball="wasi-sdk-${WASI_VERSION}-x86_64-linux.tar.gz"
-          url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/${tarball}"
+          url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_TAG}/${tarball}"
           echo "Downloading ${url}"
           curl -fL --retry 3 --continue-at - -o "$RUNNER_TEMP/wasi-sdk.tar.gz" "$url"
           tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$RUNNER_TEMP"
