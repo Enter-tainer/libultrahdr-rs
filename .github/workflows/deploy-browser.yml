@@ -26,44 +26,17 @@ jobs:
         with:
           submodules: true
 
-      - name: Install system dependencies
+      - name: Install system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm pkg-config curl
 
-      - name: Install Rust (with wasm32-wasip1 target)
+      - name: Install Rust (with wasm32-wasip1)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/wasm32-wasip1
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "pnpm"
-          cache-dependency-path: ultrahdr-browser/pnpm-lock.yaml
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        with:
-          path: ~/.pnpm-store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('ultrahdr-browser/pnpm-lock.yaml') }}
-
-      - name: Download WASI SDK
+      - name: Download WASI SDK ${{ env.WASI_VERSION }}
         run: |
           set -euo pipefail
           prefix="$RUNNER_TEMP/wasi-sdk-${WASI_VERSION}"
@@ -81,6 +54,18 @@ jobs:
           WASI_SDK_PREFIX: ${{ env.WASI_SDK_PREFIX }}
           WASI_SDK_TOOLCHAIN_FILE: ${{ env.WASI_SDK_TOOLCHAIN_FILE }}
         run: cargo build --target wasm32-wasip1 -p ultrahdr-bake --release
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+          cache-dependency-path: ultrahdr-browser/pnpm-lock.yaml
 
       - name: Install frontend deps
         working-directory: ultrahdr-browser
