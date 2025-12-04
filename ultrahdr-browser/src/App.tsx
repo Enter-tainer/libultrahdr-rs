@@ -7,15 +7,24 @@ import { Input } from "./components/ui/input";
 import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
 import { Select } from "./components/ui/select";
+import {
+  useI18n,
+  supportedLanguages,
+  statusKeyFromMessage,
+  type Lang,
+  type TranslationKey,
+} from "./lib/i18n";
 import type { WorkerStatus } from "./types/worker";
 
 type Mode = "bake" | "motion";
+type StatusEntry = { key?: TranslationKey; text?: string; params?: Record<string, string | number> };
 
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 
 export default function App() {
+  const { t, translateStatus, lang, setLang } = useI18n();
   const [mode, setMode] = React.useState<Mode>("bake");
-  const [status, setStatus] = React.useState("Idle");
+  const [status, setStatus] = React.useState<StatusEntry>({ key: "statusIdle" });
   const [log, setLog] = React.useState<string[]>([]);
   const [outputUrl, setOutputUrl] = React.useState<string | null>(null);
   const [outputName, setOutputName] = React.useState<string | null>(null);
@@ -35,39 +44,52 @@ export default function App() {
     video: null as File | null,
     timestampUs: "",
   });
+  const resolvedStatus = React.useMemo(
+    () => (status.key ? t(status.key, status.params) : status.text || ""),
+    [status, t]
+  );
 
   React.useEffect(() => {
     worker.onmessage = (event: MessageEvent<WorkerStatus>) => {
       const { type, payload } = event.data;
       if (type === "status") {
-        setStatus(payload);
-        setLog((prev) => [...prev, payload]);
+        const key = statusKeyFromMessage(payload);
+        if (key) {
+          const msg = t(key);
+          setStatus({ key });
+          setLog((prev) => [...prev, msg]);
+        } else {
+          const translated = translateStatus(payload);
+          setStatus({ text: translated });
+          setLog((prev) => [...prev, translated]);
+        }
       } else if (type === "stdout") {
         setLog((prev) => [...prev, payload]);
       } else if (type === "stderr") {
-        setLog((prev) => [...prev, `[err] ${payload}`]);
+        setLog((prev) => [...prev, `${t("logErrorPrefix")} ${payload}`]);
       } else if (type === "done") {
         const blob = new Blob([payload.buffer], { type: "image/jpeg" });
         const url = URL.createObjectURL(blob);
         setOutputUrl(url);
         setOutputName(payload.fileName);
-        setStatus("Done");
-        setLog((prev) => [...prev, `Wrote ${payload.fileName}`]);
+        setStatus({ key: "statusDone" });
+        setLog((prev) => [...prev, t("wroteFile", { file: payload.fileName })]);
       } else if (type === "error") {
-        setStatus("Error");
-        setLog((prev) => [...prev, `[error] ${payload}`]);
+        setStatus({ key: "statusError" });
+        setLog((prev) => [...prev, `${t("logErrorPrefix")} ${payload}`]);
       }
     };
-  }, []);
+  }, [t, translateStatus]);
 
   const handleBake = async () => {
     if (!bakeInputs.hdr || !bakeInputs.sdr) {
-      setStatus("Please choose two JPEG files");
+      setStatus({ key: "statusNeedTwoJpegs" });
+      setLog((prev) => [...prev, t("statusNeedTwoJpegs")]);
       return;
     }
     setOutputUrl(null);
     setLog([]);
-    setStatus("Preparing…");
+    setStatus({ key: "statusPreparing" });
     const hdrBuf = await bakeInputs.hdr.arrayBuffer();
     const sdrBuf = await bakeInputs.sdr.arrayBuffer();
     worker.postMessage(
@@ -90,12 +112,13 @@ export default function App() {
 
   const handleMotion = async () => {
     if (!motionInputs.photo || !motionInputs.video) {
-      setStatus("Please choose both photo and video");
+      setStatus({ key: "statusNeedPhotoVideo" });
+      setLog((prev) => [...prev, t("statusNeedPhotoVideo")]);
       return;
     }
     setOutputUrl(null);
     setLog([]);
-    setStatus("Preparing…");
+    setStatus({ key: "statusPreparing" });
     const photoBuf = await motionInputs.photo.arrayBuffer();
     const videoBuf = await motionInputs.video.arrayBuffer();
     worker.postMessage(
@@ -114,42 +137,59 @@ export default function App() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-6 py-10">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-400">UltraHDR</p>
-          <h1 className="text-3xl font-semibold text-white">WASI Browser Studio</h1>
-          <p className="text-slate-400">
-            Encode UltraHDR JPEGs or motion photos directly in your browser via WASI.
-          </p>
+          <h1 className="text-3xl font-semibold text-white">{t("headerTitle")}</h1>
+          <p className="text-slate-400">{t("headerSubtitle")}</p>
         </div>
-        <div className="hidden md:block rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm text-slate-300">
-          <p>Status: {status}</p>
-          <p className="text-xs text-slate-500">Uses @bjorn3/browser_wasi_shim</p>
+        <div className="flex flex-col gap-2 md:items-end">
+          <div className="flex items-center gap-2">
+            <Label className="text-slate-300">{t("languageLabel")}</Label>
+            <Select
+              aria-label={t("languageLabel")}
+              value={lang}
+              onChange={(e) => setLang(e.target.value as Lang)}
+              className="w-40"
+            >
+              {supportedLanguages.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm text-slate-300">
+            <p>
+              {t("statusLabel")}: {resolvedStatus}
+            </p>
+            <p className="text-xs text-slate-500">{t("statusUsesShim")}</p>
+          </div>
         </div>
       </header>
 
-      <Tabs defaultValue="bake" className="w-full" >
+      <Tabs defaultValue="bake" className="w-full">
         <TabsList className="bg-slate-900">
           <TabsTrigger value="bake" onClick={() => setMode("bake")}>
             <Wand2 className="mr-2 h-4 w-4" />
-            UltraHDR Bake
+            {t("tabBake")}
           </TabsTrigger>
           <TabsTrigger value="motion" onClick={() => setMode("motion")}>
             <Film className="mr-2 h-4 w-4" />
-            Motion Photo
+            {t("tabMotion")}
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="bake">
           <Card>
             <CardHeader>
-              <CardTitle>HDR + SDR ➜ UltraHDR</CardTitle>
-              <CardDescription>Auto-detects HDR/SDR ordering; tweak quality knobs if needed.</CardDescription>
+              <CardTitle>{t("bakeTitle")}</CardTitle>
+              <CardDescription>{t("bakeDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
                 <Label className="flex items-center gap-2">
-                  <Upload className="h-4 w-4" /> Input JPEG A
+                  <Upload className="h-4 w-4" /> {t("inputA")}
                 </Label>
                 <Input
                   type="file"
@@ -164,7 +204,7 @@ export default function App() {
                   }}
                 />
                 <Label className="flex items-center gap-2">
-                  <Upload className="h-4 w-4" /> Input JPEG B
+                  <Upload className="h-4 w-4" /> {t("inputB")}
                 </Label>
                 <Input
                   type="file"
@@ -182,21 +222,21 @@ export default function App() {
                   {previews.a && (
                     <img
                       src={previews.a}
-                      alt="Preview A"
+                      alt={t("previewA")}
                       className="w-full rounded-lg border border-slate-800"
                     />
                   )}
                   {previews.b && (
                     <img
                       src={previews.b}
-                      alt="Preview B"
+                      alt={t("previewB")}
                       className="w-full rounded-lg border border-slate-800"
                     />
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label>Base quality</Label>
+                    <Label>{t("baseQuality")}</Label>
                     <Input
                       type="number"
                       min={1}
@@ -208,7 +248,7 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <Label>Gainmap quality</Label>
+                    <Label>{t("gainmapQuality")}</Label>
                     <Input
                       type="number"
                       min={1}
@@ -220,7 +260,7 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <Label>Scale</Label>
+                    <Label>{t("scale")}</Label>
                     <Input
                       type="number"
                       min={1}
@@ -231,10 +271,10 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <Label>Target peak (nits)</Label>
+                    <Label>{t("targetPeak")}</Label>
                     <Input
                       type="number"
-                      placeholder="auto"
+                      placeholder={t("targetPeakPlaceholder")}
                       value={bakeInputs.targetPeak}
                       onChange={(e) =>
                         setBakeInputs((s) => ({ ...s, targetPeak: e.target.value }))
@@ -251,20 +291,20 @@ export default function App() {
                       }
                       className="h-4 w-4 rounded border-slate-600 bg-slate-900"
                     />
-                    <Label htmlFor="mc">Use multi-channel gain map</Label>
+                    <Label htmlFor="mc">{t("multichannel")}</Label>
                   </div>
                 </div>
               </div>
 
               <div className="flex flex-col gap-3">
                 <Button onClick={handleBake} className="w-full">
-                  Run bake
+                  {t("runBake")}
                 </Button>
                 <Textarea
                   readOnly
                   value={log.join("\n")}
                   className="h-40 text-xs font-mono"
-                  placeholder="Logs will appear here…"
+                  placeholder={t("logsPlaceholder")}
                 />
                 {outputUrl && (
                   <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
@@ -275,12 +315,12 @@ export default function App() {
                         download={outputName || "ultrahdr_bake_out.jpg"}
                         className="text-primary underline"
                       >
-                        Download
+                        {t("download")}
                       </a>
                     </div>
                     <img
                       src={outputUrl}
-                      alt="UltraHDR output"
+                      alt={t("outputAlt")}
                       className="w-full rounded-lg border border-slate-800"
                     />
                   </div>
@@ -293,13 +333,13 @@ export default function App() {
         <TabsContent value="motion">
           <Card>
             <CardHeader>
-              <CardTitle>Motion Photo (JPEG + MP4)</CardTitle>
-              <CardDescription>Embed a short MP4 clip into a Motion Photo container.</CardDescription>
+              <CardTitle>{t("motionTitle")}</CardTitle>
+              <CardDescription>{t("motionDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
                 <Label className="flex items-center gap-2">
-                  <Upload className="h-4 w-4" /> Still photo (JPEG)
+                  <Upload className="h-4 w-4" /> {t("motionPhoto")}
                 </Label>
                 <Input
                   type="file"
@@ -309,7 +349,7 @@ export default function App() {
                   }
                 />
                 <Label className="flex items-center gap-2">
-                  <Upload className="h-4 w-4" /> Motion clip (MP4)
+                  <Upload className="h-4 w-4" /> {t("motionVideo")}
                 </Label>
                 <Input
                   type="file"
@@ -319,10 +359,10 @@ export default function App() {
                   }
                 />
                 <div>
-                  <Label>Timestamp (µs)</Label>
+                  <Label>{t("timestamp")}</Label>
                   <Input
                     type="number"
-                    placeholder="0"
+                    placeholder={t("timestampPlaceholder")}
                     value={motionInputs.timestampUs}
                     onChange={(e) =>
                       setMotionInputs((s) => ({ ...s, timestampUs: e.target.value }))
@@ -333,13 +373,13 @@ export default function App() {
 
               <div className="flex flex-col gap-3">
                 <Button onClick={handleMotion} className="w-full">
-                  Build Motion Photo
+                  {t("buildMotion")}
                 </Button>
                 <Textarea
                   readOnly
                   value={log.join("\n")}
                   className="h-40 text-xs font-mono"
-                  placeholder="Logs will appear here…"
+                  placeholder={t("logsPlaceholder")}
                 />
                 {outputUrl && (
                   <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
@@ -350,12 +390,12 @@ export default function App() {
                         download={outputName || "motionphoto.jpg"}
                         className="text-primary underline"
                       >
-                        Download
+                        {t("download")}
                       </a>
                     </div>
                     <img
                       src={outputUrl}
-                      alt="Motion Photo"
+                      alt={t("motionAlt")}
                       className="w-full rounded-lg border border-slate-800"
                     />
                   </div>
