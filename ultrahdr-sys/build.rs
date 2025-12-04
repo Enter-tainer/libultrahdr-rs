@@ -1,6 +1,29 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+fn wasi_toolchain() -> Option<(PathBuf, PathBuf)> {
+    let target = env::var("TARGET").ok()?;
+    if !target.contains("wasm32-wasi") {
+        return None;
+    }
+
+    let prefix = env::var("WASI_SDK_PREFIX")
+        .or_else(|_| env::var("WASI_SDK_PATH"))
+        .unwrap_or_else(|_| "/opt/wasi-sdk".to_string());
+    let env_toolchain = env::var_os("WASI_SDK_TOOLCHAIN_FILE").map(PathBuf::from);
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let toolchain = env_toolchain.unwrap_or_else(|| {
+        let name = if target.contains("wasip1") || target_env == "p1" {
+            "wasi-sdk-p1.cmake"
+        } else {
+            "wasi-sdk.cmake"
+        };
+        PathBuf::from(&prefix).join("share/cmake").join(name)
+    });
+    Some((toolchain, PathBuf::from(prefix)))
+}
 
 fn locate_src_dir(manifest_dir: &Path) -> PathBuf {
     if let Ok(env) = env::var("ULTRAHDR_SRC_DIR") {
@@ -86,31 +109,69 @@ fn main() {
         .expect("ultrahdr-sys has no parent dir")
         .join("patches/libultrahdr-no-threads.patch");
     apply_local_patches(&manifest_dir, &src_dir);
+    println!("cargo:rerun-if-env-changed=ULTRAHDR_SRC_DIR");
+    println!("cargo:rerun-if-env-changed=ULTRAHDR_SKIP_PATCHES");
+    println!("cargo:rerun-if-env-changed=WASI_SDK_PREFIX");
+    println!("cargo:rerun-if-env-changed=WASI_SDK_PATH");
+    println!("cargo:rerun-if-env-changed=WASI_SDK_TOOLCHAIN_FILE");
+
+    let target = env::var("TARGET").expect("TARGET");
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_family = env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
+    let is_wasm = target_family == "wasm";
+    let wasi = wasi_toolchain();
 
     let mut cfg = cmake::Config::new(&src_dir);
-    cfg.profile("Release")
-        .define("UHDR_BUILD_EXAMPLES", "OFF")
-        .define("UHDR_BUILD_TESTS", "OFF")
-        .define("UHDR_BUILD_BENCHMARK", "OFF")
-        .define("UHDR_BUILD_FUZZERS", "OFF")
-        .define("UHDR_BUILD_JAVA", "OFF")
-        .define("UHDR_ENABLE_INSTALL", "OFF")
-        .define(
-            "UHDR_BUILD_DEPS",
-            if cfg!(feature = "vendored") {
-                "ON"
-            } else {
-                "OFF"
-            },
-        )
-        .define(
-            "BUILD_SHARED_LIBS",
-            if cfg!(feature = "shared") {
-                "ON"
-            } else {
-                "OFF"
-            },
+    cfg.profile("Release");
+    if let Some((toolchain, prefix)) = &wasi {
+        if !toolchain.is_file() {
+            panic!(
+                "WASI CMake toolchain file not found: {}",
+                toolchain.display()
+            );
+        }
+        cfg.define(
+            "CMAKE_TOOLCHAIN_FILE",
+            toolchain
+                .to_str()
+                .expect("toolchain path contains non-UTF8 characters"),
         );
+        cfg.define(
+            "WASI_SDK_PREFIX",
+            prefix
+                .to_str()
+                .expect("WASI_SDK_PREFIX contains non-UTF8 characters"),
+        );
+        cfg.define("CMAKE_TRY_COMPILE_TARGET_TYPE", "STATIC_LIBRARY");
+        cfg.define("CMAKE_SYSTEM_NAME", "WASI");
+        cfg.define("CMAKE_SYSTEM_PROCESSOR", "wasm32");
+    }
+    if is_wasm && cfg!(feature = "shared") {
+        panic!("shared linking is not supported for wasm32 targets");
+    }
+    if is_wasm && cfg!(feature = "gles") {
+        panic!("gles feature is not supported for wasm32 targets");
+    }
+
+    let build_shared = cfg!(feature = "shared") && !is_wasm;
+    let disable_threads = cfg!(feature = "no-threads") || is_wasm;
+
+    cfg.define("UHDR_BUILD_EXAMPLES", "OFF");
+    cfg.define("UHDR_BUILD_TESTS", "OFF");
+    cfg.define("UHDR_BUILD_BENCHMARK", "OFF");
+    cfg.define("UHDR_BUILD_FUZZERS", "OFF");
+    cfg.define("UHDR_BUILD_JAVA", "OFF");
+    cfg.define("UHDR_ENABLE_INSTALL", "OFF");
+    cfg.define(
+        "UHDR_BUILD_DEPS",
+        if cfg!(feature = "vendored") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
+    cfg.define("BUILD_SHARED_LIBS", if build_shared { "ON" } else { "OFF" });
 
     if cfg!(feature = "gles") {
         cfg.define("UHDR_ENABLE_GLES", "ON");
@@ -124,14 +185,12 @@ fn main() {
             "OFF"
         },
     );
-    if cfg!(feature = "no-threads") {
+    if disable_threads {
         cfg.define("UHDR_DISABLE_THREADS", "ON");
     }
 
     // Build only the main library target; install target is disabled upstream.
-    let cmake_target = if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc"
-        && !cfg!(feature = "shared")
-    {
+    let cmake_target = if target_env == "msvc" && !build_shared {
         "uhdr-static"
     } else {
         "uhdr"
@@ -145,8 +204,6 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-search=native={}/lib64", dst.display());
     println!("cargo:rustc-link-search=native={}/build", dst.display());
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_env == "msvc" {
         println!(
             "cargo:rustc-link-search=native={}/build/Release",
@@ -183,21 +240,32 @@ fn main() {
         println!("cargo:rustc-link-lib=jpeg");
     }
 
-    let shared = cfg!(feature = "shared");
-    let link_name = if target_env == "msvc" && !shared {
+    let link_name = if target_env == "msvc" && !build_shared {
         "uhdr-static"
     } else {
         "uhdr"
     };
-    let link_kind = if shared { "dylib" } else { "static" };
+    let link_kind = if build_shared { "dylib" } else { "static" };
     println!("cargo:rustc-link-lib={}={}", link_kind, link_name);
     if target_env != "msvc" {
-        let cxx_stdlib = if target_os == "macos" {
-            "c++"
+        if is_wasm {
+            if let Some((_, prefix)) = &wasi {
+                println!(
+                    "cargo:rustc-link-search=native={}/share/wasi-sysroot/lib/wasm32-wasip1",
+                    prefix.display()
+                );
+            }
+            println!("cargo:rustc-link-lib=static=c++");
+            println!("cargo:rustc-link-lib=static=c++abi");
+            println!("cargo:rustc-link-lib=static=setjmp");
         } else {
-            "stdc++"
-        };
-        println!("cargo:rustc-link-lib={}", cxx_stdlib);
+            let cxx_stdlib = if target_os == "macos" {
+                "c++"
+            } else {
+                "stdc++"
+            };
+            println!("cargo:rustc-link-lib={}", cxx_stdlib);
+        }
     }
 
     // Re-run if the public header changes.
@@ -207,19 +275,43 @@ fn main() {
     );
     println!("cargo:rerun-if-changed={}", patch_path.display());
 
-    let bindings = bindgen::Builder::default()
+    let bindgen_target = if is_wasm {
+        "i686-unknown-linux-gnu"
+    } else {
+        target.as_str()
+    };
+
+    let mut bindings = bindgen::Builder::default()
         .header(src_dir.join("ultrahdr_api.h").to_string_lossy())
         .clang_arg(format!("-I{}", src_dir.display()))
-        .allowlist_function("uhdr_.*")
-        .allowlist_type("uhdr_.*")
-        .allowlist_var("UHDR_.*")
         .rustified_enum("uhdr_.*")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false)
-        .generate()
-        .expect("bindgen failed");
+        .clang_arg(format!("--target={}", bindgen_target));
+    if !is_wasm {
+        bindings = bindings
+            .allowlist_function("uhdr_.*")
+            .allowlist_type("uhdr_.*")
+            .allowlist_var("UHDR_.*");
+    }
+    if !is_wasm {
+        if let Some((_, prefix)) = &wasi {
+            bindings =
+                bindings.clang_arg(format!("--sysroot={}/share/wasi-sysroot", prefix.display()));
+        }
+    }
+    let bindings = bindings.generate().expect("bindgen failed");
 
+    let bindings_path = out_dir.join("bindings.rs");
     bindings
-        .write_to_file(out_dir.join("bindings.rs"))
+        .write_to_file(&bindings_path)
         .expect("failed to write bindings");
+    if is_wasm {
+        if let Ok(content) = fs::read_to_string(&bindings_path) {
+            let fn_count = content.matches("pub fn ").count();
+            if fn_count == 0 {
+                println!("cargo:warning=bindgen generated 0 functions for wasm target");
+            }
+        }
+    }
 }
