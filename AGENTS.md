@@ -12,6 +12,7 @@ What this repo is: Rust bindings for Google's `libultrahdr` gain-map JPEG librar
 - Ensure submodules are present: `git submodule update --init --recursive`.
 - Tooling prerequisites: `cmake`, `ninja` (optional), `nasm`, `pkg-config`; add EGL/GLES headers if building with `--features gles`.
 - Default build (vendored deps): `cargo build -p ultrahdr-bake --release`.
+- WASM/WASI: target `wasm32-wasip1` with wasi-sdk (toolchain file at `/opt/wasi-sdk/share/cmake/wasi-sdk-p1.cmake`). `cargo build --target wasm32-wasip1 -p ultrahdr-bake --release` works with vendored deps after cloning `third_party/turbojpeg`. Run via wasmtime with import stubbing, e.g. `XDG_CACHE_HOME=$(pwd)/.cache wasmtime -W unknown-imports-default=yes --dir=. target/wasm32-wasip1/release/ultrahdr-bake.wasm --help`.
 - CI parity checks:  
   `cargo fmt --all -- --check`  
   `cargo clippy --workspace --all-targets --all-features --locked`  
