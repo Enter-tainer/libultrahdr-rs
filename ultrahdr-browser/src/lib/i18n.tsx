@@ -7,14 +7,16 @@ type TranslationDict = Record<Lang, Record<string, string>>;
 const translations: TranslationDict = {
   en: {
     headerTitle: "UltraHDR Studio",
-    headerSubtitle: "Encode UltraHDR JPEGs or motion photos directly in your browser via WASI.",
+    headerSubtitle:
+      "Encode UltraHDR JPEGs or motion photos directly in your browser via WASI.",
     repoLink: "Repository",
     statusLabel: "Status",
     statusUsesShim: "Uses @bjorn3/browser_wasi_shim",
     tabBake: "UltraHDR Bake",
     tabMotion: "Motion Photo",
     bakeTitle: "HDR + SDR ➜ UltraHDR",
-    bakeDescription: "Auto-detects HDR/SDR ordering; tweak quality knobs if needed.",
+    bakeDescription:
+      "Auto-detects HDR/SDR ordering; tweak quality knobs if needed.",
     inputA: "Input JPEG A",
     inputB: "Input JPEG B",
     previewA: "Preview A",
@@ -25,13 +27,18 @@ const translations: TranslationDict = {
     targetPeak: "Target peak (nits)",
     targetPeakPlaceholder: "auto",
     multichannel: "Use multi-channel gain map",
-    tooltipInputA: "Upload HDR or SDR JPEG; ordering is auto-detected with Input B.",
-    tooltipInputB: "Upload the second JPEG (HDR/SDR). Ordering is auto-detected.",
+    tooltipInputA:
+      "Upload HDR or SDR JPEG; ordering is auto-detected with Input B.",
+    tooltipInputB:
+      "Upload the second JPEG (HDR/SDR). Ordering is auto-detected.",
     tooltipBaseQuality: "JPEG quality (1-100) for the base SDR layer.",
     tooltipGainmapQuality: "JPEG quality (1-100) for the gain map.",
-    tooltipScale: "Gain map resolution scale (integer). 1 = same size; 2 = half res; 4 = quarter res.",
-    tooltipTargetPeak: "Optional target peak brightness in nits. Leave blank for auto.",
-    tooltipMultichannel: "Encode gain map with separate RGB channels instead of luma-only.",
+    tooltipScale:
+      "Gain map resolution scale (integer). 1 = same size; 2 = half res; 4 = quarter res.",
+    tooltipTargetPeak:
+      "Optional target peak brightness in nits. Leave blank for auto.",
+    tooltipMultichannel:
+      "Encode gain map with separate RGB channels instead of luma-only.",
     runBake: "Run bake",
     logsPlaceholder: "Logs will appear here…",
     download: "Download",
@@ -44,7 +51,8 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "Upload the JPEG frame for the Motion Photo.",
     tooltipMotionVideo: "Upload the short MP4 clip to embed.",
-    tooltipTimestamp: "Optional microsecond offset where motion should start (default 0).",
+    tooltipTimestamp:
+      "Optional microsecond offset where motion should start (default 0).",
     buildMotion: "Build Motion Photo",
     motionAlt: "Motion Photo",
     languageLabel: "Language",
@@ -85,7 +93,8 @@ const translations: TranslationDict = {
     tooltipInputB: "上传第二张 HDR/SDR JPEG，顺序自动判断。",
     tooltipBaseQuality: "基础 SDR 层的 JPEG 质量 (1-100)。",
     tooltipGainmapQuality: "增益图的 JPEG 质量 (1-100)。",
-    tooltipScale: "增益图分辨率缩放（整数）。1 表示与基底相同，2 表示长宽各减半，4 表示再减半。",
+    tooltipScale:
+      "增益图分辨率缩放（整数）。1 表示与基底相同，2 表示长宽各减半，4 表示再减半。",
     tooltipTargetPeak: "可选的目标峰值亮度（尼特），留空自动。",
     tooltipMultichannel: "将增益图编码为独立 RGB 通道，而非单通道亮度。",
     runBake: "开始合成",
@@ -141,7 +150,8 @@ const translations: TranslationDict = {
     tooltipInputB: "上傳第二張 HDR/SDR JPEG，順序自動判斷。",
     tooltipBaseQuality: "基礎 SDR 層的 JPEG 品質 (1-100)。",
     tooltipGainmapQuality: "增益圖的 JPEG 品質 (1-100)。",
-    tooltipScale: "增益圖解析度縮放（整數）。1 表示與基底相同，2 表示長寬各減半，4 再減半。",
+    tooltipScale:
+      "增益圖解析度縮放（整數）。1 表示與基底相同，2 表示長寬各減半，4 再減半。",
     tooltipTargetPeak: "可選目標峰值亮度（尼特），空白為自動。",
     tooltipMultichannel: "將增益圖編碼為獨立 RGB 通道而非單通道亮度。",
     runBake: "開始合成",
@@ -175,14 +185,16 @@ const translations: TranslationDict = {
   },
   ja: {
     headerTitle: "UltraHDR Studio",
-    headerSubtitle: "WASI を使ってブラウザ上で UltraHDR JPEG やモーションフォトをエンコードします。",
+    headerSubtitle:
+      "WASI を使ってブラウザ上で UltraHDR JPEG やモーションフォトをエンコードします。",
     repoLink: "リポジトリ",
     statusLabel: "ステータス",
     statusUsesShim: "@bjorn3/browser_wasi_shim を使用",
     tabBake: "UltraHDR ベイク",
     tabMotion: "モーションフォト",
     bakeTitle: "HDR + SDR ➜ UltraHDR",
-    bakeDescription: "HDR/SDR の順序を自動判定。必要に応じて品質を調整できます。",
+    bakeDescription:
+      "HDR/SDR の順序を自動判定。必要に応じて品質を調整できます。",
     inputA: "入力 JPEG A",
     inputB: "入力 JPEG B",
     previewA: "プレビュー A",
@@ -193,13 +205,16 @@ const translations: TranslationDict = {
     targetPeak: "目標ピーク（ニット）",
     targetPeakPlaceholder: "自動",
     multichannel: "マルチチャネルのゲインマップを使用",
-    tooltipInputA: "HDR または SDR の JPEG をアップロード。B と組み合わせて順序を自動判定。",
+    tooltipInputA:
+      "HDR または SDR の JPEG をアップロード。B と組み合わせて順序を自動判定。",
     tooltipInputB: "2 枚目の HDR/SDR JPEG をアップロード。順序は自動判定。",
     tooltipBaseQuality: "ベース SDR レイヤーの JPEG 品質 (1-100)。",
     tooltipGainmapQuality: "ゲインマップの JPEG 品質 (1-100)。",
-    tooltipScale: "ゲインマップの解像度スケール（整数）。1 で同じ、2 で縦横半分、4 でさらに半分。",
+    tooltipScale:
+      "ゲインマップの解像度スケール（整数）。1 で同じ、2 で縦横半分、4 でさらに半分。",
     tooltipTargetPeak: "任意の目標ピーク輝度 (nit)。空欄で自動。",
-    tooltipMultichannel: "ゲインマップを輝度のみではなく RGB で個別に符号化します。",
+    tooltipMultichannel:
+      "ゲインマップを輝度のみではなく RGB で個別に符号化します。",
     runBake: "ベイクを実行",
     logsPlaceholder: "ログはここに表示されます…",
     download: "ダウンロード",
@@ -212,7 +227,8 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "モーションフォト用の静止 JPEG をアップロード。",
     tooltipMotionVideo: "埋め込む短い MP4 クリップをアップロード。",
-    tooltipTimestamp: "任意: モーション開始のマイクロ秒オフセット（デフォルト 0）。",
+    tooltipTimestamp:
+      "任意: モーション開始のマイクロ秒オフセット（デフォルト 0）。",
     buildMotion: "モーションフォトを作成",
     motionAlt: "モーションフォト",
     languageLabel: "言語",
@@ -231,14 +247,16 @@ const translations: TranslationDict = {
   },
   ko: {
     headerTitle: "UltraHDR Studio",
-    headerSubtitle: "WASI를 통해 브라우저에서 직접 UltraHDR JPEG 또는 모션 포토를 인코딩합니다.",
+    headerSubtitle:
+      "WASI를 통해 브라우저에서 직접 UltraHDR JPEG 또는 모션 포토를 인코딩합니다.",
     repoLink: "저장소",
     statusLabel: "상태",
     statusUsesShim: "@bjorn3/browser_wasi_shim 사용",
     tabBake: "UltraHDR 베이크",
     tabMotion: "모션 포토",
     bakeTitle: "HDR + SDR ➜ UltraHDR",
-    bakeDescription: "HDR/SDR 순서를 자동 감지하며, 필요하면 품질을 조정하세요.",
+    bakeDescription:
+      "HDR/SDR 순서를 자동 감지하며, 필요하면 품질을 조정하세요.",
     inputA: "입력 JPEG A",
     inputB: "입력 JPEG B",
     previewA: "미리보기 A",
@@ -253,7 +271,8 @@ const translations: TranslationDict = {
     tooltipInputB: "두 번째 HDR/SDR JPEG 업로드. 순서 자동 감지.",
     tooltipBaseQuality: "베이스 SDR 레이어의 JPEG 품질 (1-100).",
     tooltipGainmapQuality: "게인맵 JPEG 품질 (1-100).",
-    tooltipScale: "게인맵 해상도 배율(정수). 1은 동일, 2는 가로세로 절반, 4는 그보다 더 절반.",
+    tooltipScale:
+      "게인맵 해상도 배율(정수). 1은 동일, 2는 가로세로 절반, 4는 그보다 더 절반.",
     tooltipTargetPeak: "선택: 목표 피크 휘도(니트). 비워두면 자동.",
     tooltipMultichannel: "게인맵을 밝기 대신 RGB 각 채널로 인코딩합니다.",
     runBake: "베이크 실행",
@@ -296,7 +315,9 @@ const statusKeyByMessage: Record<string, TranslationKey> = {
   "Output file missing": "statusOutputMissing",
 };
 
-export function statusKeyFromMessage(message: string): TranslationKey | undefined {
+export function statusKeyFromMessage(
+  message: string,
+): TranslationKey | undefined {
   return statusKeyByMessage[message];
 }
 
@@ -323,12 +344,17 @@ type I18nContextValue = {
   translateStatus: (message: string) => string;
 };
 
-const I18nContext = React.createContext<I18nContextValue | undefined>(undefined);
+const I18nContext = React.createContext<I18nContextValue | undefined>(
+  undefined,
+);
 
-function interpolate(template: string, params?: Record<string, string | number>) {
+function interpolate(
+  template: string,
+  params?: Record<string, string | number>,
+) {
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (_, name) =>
-    params[name] !== undefined ? String(params[name]) : `{${name}}`
+    params[name] !== undefined ? String(params[name]) : `{${name}}`,
   );
 }
 
@@ -376,7 +402,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       const template = dict[key] ?? fallback[key] ?? key;
       return interpolate(template, params);
     },
-    [lang]
+    [lang],
   );
 
   const translateStatus = React.useCallback(
@@ -385,7 +411,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       if (key) return t(key);
       return message;
     },
-    [t]
+    [t],
   );
 
   return (
