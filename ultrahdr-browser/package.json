@@ -1,0 +1,18 @@
+{
+  "name": "ultrahdr-browser",
+  "version": "0.1.0",
+  "description": "Minimal UltraHDR bake demo in the browser (WASI via @bjorn3/browser_wasi_shim)",
+  "type": "module",
+  "scripts": {
+    "wasm:copy": "mkdir -p public && cp ../target/wasm32-wasip1/release/ultrahdr-bake.wasm public/ultrahdr-bake.wasm",
+    "dev": "pnpm wasm:copy && vite",
+    "build": "pnpm wasm:copy && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "^0.3.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
