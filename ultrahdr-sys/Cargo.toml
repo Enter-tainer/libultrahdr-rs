@@ -24,6 +24,8 @@ gles = []
 iso21496 = []
 # Disable std::thread usage in upstream build (single-threaded).
 no-threads = []
+# Raise UHDR_MAX_DIMENSION to libjpeg-turbo's JPEG_MAX_DIMENSION.
+jpeg-max-dimension = []
 
 [dependencies]
 

@@ -12,12 +12,13 @@ description = "Bake HDR intent + SDR base into an UltraHDR JPEG (CLI)"
 publish = false
 
 [features]
-default = ["vendored", "iso21496"]
+default = ["vendored", "iso21496", "jpeg-max-dimension"]
 vendored = ["ultrahdr/vendored"]
 shared = ["ultrahdr/shared"]
 gles = ["ultrahdr/gles"]
 iso21496 = ["ultrahdr/iso21496"]
 no-threads = ["ultrahdr/no-threads"]
+jpeg-max-dimension = ["ultrahdr/jpeg-max-dimension"]
 
 [dependencies]
 ultrahdr = { path = "../ultrahdr" }

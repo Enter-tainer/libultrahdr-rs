@@ -187,6 +187,10 @@ fn main() {
     if disable_threads {
         cfg.define("UHDR_DISABLE_THREADS", "ON");
     }
+    if cfg!(feature = "jpeg-max-dimension") {
+        // Use libjpeg-turbo's hardcoded JPEG_MAX_DIMENSION (65500).
+        cfg.define("UHDR_MAX_DIMENSION", "65500");
+    }
 
     // Build only the main library target; install target is disabled upstream.
     let cmake_target = if target_env == "msvc" && !build_shared {
