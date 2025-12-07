@@ -28,11 +28,28 @@ function emit(msg: WorkerStatus) {
   postMessage(msg);
 }
 
+function normalizeNames(
+  files: { name: string; buffer: ArrayBuffer }[],
+  fallbackExt: string,
+) {
+  return files.map((file, idx) => {
+    const name = file.name && file.name.trim().length > 0
+      ? file.name
+      : `input${idx + 1}.${fallbackExt}`;
+    return { name, buffer: file.buffer };
+  });
+}
+
 async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
   emit({ type: "status", payload: "Preparing WASI FS…" });
   resetFs();
-  writeFile("input1.jpg", new Uint8Array(req.hdr));
-  writeFile("input2.jpg", new Uint8Array(req.sdr));
+  if (req.files.length !== 2) {
+    throw new Error("Need exactly two JPEG inputs");
+  }
+  const files = normalizeNames(req.files, "jpg").slice(0, 2);
+  for (const file of files) {
+    writeFile(file.name, new Uint8Array(file.buffer));
+  }
 
   const args = [
     "ultrahdr-bake.wasm",
@@ -50,7 +67,7 @@ async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
     args.push("--target-peak", req.opts.targetPeak.toString());
   }
   // Always rely on CLI auto-detection: provide two positional inputs.
-  args.push("input1.jpg", "input2.jpg");
+  args.push(files[0].name, files[1].name);
 
   await runCli(args, req.opts.outName);
 }
@@ -58,22 +75,24 @@ async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
 async function runMotion(req: Extract<WorkerRequest, { type: "motion" }>) {
   emit({ type: "status", payload: "Preparing WASI FS…" });
   resetFs();
-  writeFile("photo.jpg", new Uint8Array(req.photo));
-  writeFile("video.mp4", new Uint8Array(req.video));
+  if (req.files.length !== 2) {
+    throw new Error("Need exactly two inputs (photo + video)");
+  }
+  const files = normalizeNames(req.files, "bin").slice(0, 2);
+  for (const file of files) {
+    writeFile(file.name, new Uint8Array(file.buffer));
+  }
 
   const args = [
     "ultrahdr-bake.wasm",
     "motion",
-    "--photo",
-    "photo.jpg",
-    "--video",
-    "video.mp4",
     "--out",
     req.opts.outName,
   ];
   if (req.opts.timestampUs !== undefined) {
     args.push("--timestamp-us", req.opts.timestampUs.toString());
   }
+  args.push(files[0].name, files[1].name);
 
   await runCli(args, req.opts.outName);
 }

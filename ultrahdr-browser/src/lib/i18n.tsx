@@ -31,6 +31,9 @@ const translations: TranslationDict = {
       "Upload HDR or SDR JPEG; ordering is auto-detected with Input B.",
     tooltipInputB:
       "Upload the second JPEG (HDR/SDR). Ordering is auto-detected.",
+    inputPair: "Input JPEGs (choose two)",
+    tooltipInputPair:
+      "Upload the two HDR/SDR JPEGs together; ordering is auto-detected.",
     tooltipBaseQuality: "JPEG quality (1-100) for the base SDR layer.",
     tooltipGainmapQuality: "JPEG quality (1-100) for the gain map.",
     tooltipScale:
@@ -52,6 +55,9 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "Upload the JPEG frame for the Motion Photo.",
     tooltipMotionVideo: "Upload the short MP4 clip to embed.",
+    motionPair: "Photo + video (choose two)",
+    tooltipMotionPair:
+      "Upload the JPEG photo and MP4/MOV together; types are auto-detected.",
     tooltipTimestamp:
       "Optional microsecond offset where motion should start (default 0).",
     buildMotion: "Build Motion Photo",
@@ -92,6 +98,8 @@ const translations: TranslationDict = {
     multichannel: "使用多通道增益图",
     tooltipInputA: "上传 HDR 或 SDR JPEG；与 B 配对后自动判断顺序。",
     tooltipInputB: "上传第二张 HDR/SDR JPEG，顺序自动判断。",
+    inputPair: "输入 JPEG（选择两张）",
+    tooltipInputPair: "同时上传两张 HDR/SDR JPEG，顺序自动判断。",
     tooltipBaseQuality: "基础 SDR 层的 JPEG 质量 (1-100)。",
     tooltipGainmapQuality: "增益图的 JPEG 质量 (1-100)。",
     tooltipScale:
@@ -111,6 +119,8 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "上传动态照片中的静态 JPEG 帧。",
     tooltipMotionVideo: "上传要内嵌的短 MP4 片段。",
+    motionPair: "照片 + 视频（选择两个）",
+    tooltipMotionPair: "同时上传 JPEG 照片和 MP4/MOV，自动识别类型。",
     tooltipTimestamp: "可选：运动开始的微秒偏移（默认 0）。",
     buildMotion: "生成动态照片",
     motionAlt: "动态照片",
@@ -150,6 +160,8 @@ const translations: TranslationDict = {
     multichannel: "使用多通道增益圖",
     tooltipInputA: "上傳 HDR 或 SDR JPEG；與 B 搭配後自動判斷順序。",
     tooltipInputB: "上傳第二張 HDR/SDR JPEG，順序自動判斷。",
+    inputPair: "輸入 JPEG（選兩張）",
+    tooltipInputPair: "同時上傳兩張 HDR/SDR JPEG，順序自動判斷。",
     tooltipBaseQuality: "基礎 SDR 層的 JPEG 品質 (1-100)。",
     tooltipGainmapQuality: "增益圖的 JPEG 品質 (1-100)。",
     tooltipScale:
@@ -169,6 +181,8 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "上傳動態照片的靜態 JPEG 影像。",
     tooltipMotionVideo: "上傳要嵌入的短 MP4 影片。",
+    motionPair: "照片 + 影片（選兩個）",
+    tooltipMotionPair: "同時上傳 JPEG 照片和 MP4/MOV，會自動辨識型別。",
     tooltipTimestamp: "可選：動態開始的微秒位移（預設 0）。",
     buildMotion: "產生動態照片",
     motionAlt: "動態照片",
@@ -211,6 +225,9 @@ const translations: TranslationDict = {
     tooltipInputA:
       "HDR または SDR の JPEG をアップロード。B と組み合わせて順序を自動判定。",
     tooltipInputB: "2 枚目の HDR/SDR JPEG をアップロード。順序は自動判定。",
+    inputPair: "入力 JPEG（2 枚）",
+    tooltipInputPair:
+      "HDR/SDR の 2 枚をまとめてアップロード。順序は自動判定します。",
     tooltipBaseQuality: "ベース SDR レイヤーの JPEG 品質 (1-100)。",
     tooltipGainmapQuality: "ゲインマップの JPEG 品質 (1-100)。",
     tooltipScale:
@@ -231,6 +248,9 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "モーションフォト用の静止 JPEG をアップロード。",
     tooltipMotionVideo: "埋め込む短い MP4 クリップをアップロード。",
+    motionPair: "写真 + 動画（2 ファイル）",
+    tooltipMotionPair:
+      "JPEG 写真と MP4/MOV をまとめてアップロード。タイプは自動判別します。",
     tooltipTimestamp:
       "任意: モーション開始のマイクロ秒オフセット（デフォルト 0）。",
     buildMotion: "モーションフォトを作成",
@@ -273,6 +293,8 @@ const translations: TranslationDict = {
     multichannel: "멀티 채널 게인맵 사용",
     tooltipInputA: "HDR 또는 SDR JPEG 업로드. B와 함께 순서를 자동 감지합니다.",
     tooltipInputB: "두 번째 HDR/SDR JPEG 업로드. 순서 자동 감지.",
+    inputPair: "입력 JPEG (2개 선택)",
+    tooltipInputPair: "HDR/SDR JPEG 두 장을 한 번에 업로드하세요. 순서는 자동 판단합니다.",
     tooltipBaseQuality: "베이스 SDR 레이어의 JPEG 품질 (1-100).",
     tooltipGainmapQuality: "게인맵 JPEG 품질 (1-100).",
     tooltipScale:
@@ -292,6 +314,8 @@ const translations: TranslationDict = {
     timestampPlaceholder: "0",
     tooltipMotionPhoto: "모션 포토의 정지 JPEG 프레임을 업로드하세요.",
     tooltipMotionVideo: "삽입할 짧은 MP4 클립을 업로드하세요.",
+    motionPair: "사진 + 영상 (2개 선택)",
+    tooltipMotionPair: "JPEG 사진과 MP4/MOV를 한 번에 업로드하면 유형을 자동 인식합니다.",
     tooltipTimestamp: "선택: 모션 시작 마이크로초 오프셋(기본 0).",
     buildMotion: "모션 포토 생성",
     motionAlt: "모션 포토",

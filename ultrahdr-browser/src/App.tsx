@@ -43,14 +43,48 @@ function appendSuffix(filename: string, suffix: string, fallbackExt: string) {
   return `${filename}${suffix}.${fallbackExt}`;
 }
 
-function defaultBakeOutName(sdr: File | null) {
-  if (sdr?.name) {
-    return appendSuffix(sdr.name, "-merge", "jpg");
+function defaultBakeOutName(files: File[]) {
+  const two = files.slice(0, 2);
+  const sdrNamed = two.find((f) => /sdr/i.test(f.name));
+  if (sdrNamed) return appendSuffix(sdrNamed.name, "-merge", "jpg");
+  if (two.length === 2) {
+    if (/hdr/i.test(two[0].name) && !/hdr/i.test(two[1].name)) {
+      return appendSuffix(two[1].name, "-merge", "jpg");
+    }
+    if (/hdr/i.test(two[1].name) && !/hdr/i.test(two[0].name)) {
+      return appendSuffix(two[0].name, "-merge", "jpg");
+    }
+  }
+  if (two[0]?.name) {
+    return appendSuffix(two[0].name, "-merge", "jpg");
   }
   return "ultrahdr_bake_out.jpg";
 }
 
-function defaultMotionOutName(photo: File | null) {
+type MediaKind = "jpeg" | "video" | "unknown";
+
+function detectMediaKind(file: File): MediaKind {
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (file.type === "image/jpeg" || ext === "jpg" || ext === "jpeg") {
+    return "jpeg";
+  }
+  if (
+    file.type.startsWith("video/") ||
+    ext === "mp4" ||
+    ext === "m4v" ||
+    ext === "mov" ||
+    ext === "qt"
+  ) {
+    return "video";
+  }
+  return "unknown";
+}
+
+function defaultMotionOutName(files: File[]) {
+  const two = files.slice(0, 2);
+  const photo =
+    two.find((f) => detectMediaKind(f) === "jpeg") ||
+    (two.length > 0 ? two[0] : null);
   if (photo?.name) {
     return appendSuffix(photo.name, "-motion", "jpg");
   }
@@ -73,26 +107,24 @@ export default function App() {
   );
 
   const [bakeInputs, setBakeInputs] = React.useState({
-    hdr: null as File | null,
-    sdr: null as File | null,
     baseQ: 95,
     gainmapQ: 95,
     scale: 1,
     multichannel: false,
     targetPeak: "",
   });
+  const [bakeFiles, setBakeFiles] = React.useState<File[]>([]);
   const [motionInputs, setMotionInputs] = React.useState({
-    photo: null as File | null,
-    video: null as File | null,
     timestampUs: "",
   });
+  const [motionFiles, setMotionFiles] = React.useState<File[]>([]);
   const bakeDefaultOut = React.useMemo(
-    () => defaultBakeOutName(bakeInputs.sdr),
-    [bakeInputs.sdr],
+    () => defaultBakeOutName(bakeFiles),
+    [bakeFiles],
   );
   const motionDefaultOut = React.useMemo(
-    () => defaultMotionOutName(motionInputs.photo),
-    [motionInputs.photo],
+    () => defaultMotionOutName(motionFiles),
+    [motionFiles],
   );
   const resolvedStatus = React.useMemo(
     () => (status.key ? t(status.key, status.params) : status.text || ""),
@@ -131,8 +163,34 @@ export default function App() {
     };
   }, [t, translateStatus]);
 
+  const handleBakeFiles = (list: FileList | null) => {
+    const files = Array.from(list || []).slice(0, 2);
+    setBakeFiles(files);
+    setPreviews((p) => {
+      if (p.a) URL.revokeObjectURL(p.a);
+      if (p.b) URL.revokeObjectURL(p.b);
+      return {
+        a: files[0] ? URL.createObjectURL(files[0]) : undefined,
+        b: files[1] ? URL.createObjectURL(files[1]) : undefined,
+      };
+    });
+  };
+
+  const handleMotionFiles = (list: FileList | null) => {
+    const files = Array.from(list || []).slice(0, 2);
+    setMotionFiles(files);
+    setPreviews((p) => {
+      if (p.a) URL.revokeObjectURL(p.a);
+      if (p.b) URL.revokeObjectURL(p.b);
+      return {
+        a: files[0] ? URL.createObjectURL(files[0]) : undefined,
+        b: files[1] ? URL.createObjectURL(files[1]) : undefined,
+      };
+    });
+  };
+
   const handleBake = async () => {
-    if (!bakeInputs.hdr || !bakeInputs.sdr) {
+    if (bakeFiles.length !== 2) {
       setStatus({ key: "statusNeedTwoJpegs" });
       setLog((prev) => [...prev, t("statusNeedTwoJpegs")]);
       return;
@@ -140,14 +198,17 @@ export default function App() {
     setOutputUrl(null);
     setLog([]);
     setStatus({ key: "statusPreparing" });
-    const hdrBuf = await bakeInputs.hdr.arrayBuffer();
-    const sdrBuf = await bakeInputs.sdr.arrayBuffer();
+    const selected = bakeFiles.slice(0, 2);
+    const buffers = await Promise.all(selected.map((f) => f.arrayBuffer()));
+    const files = selected.map((f, idx) => ({
+      name: f.name || `input${idx + 1}.jpg`,
+      buffer: buffers[idx],
+    }));
     const outName = (bakeOutName || "").trim() || bakeDefaultOut;
     worker.postMessage(
       {
         type: "bake",
-        hdr: hdrBuf,
-        sdr: sdrBuf,
+        files,
         opts: {
           outName,
           baseQ: bakeInputs.baseQ,
@@ -159,12 +220,12 @@ export default function App() {
             : undefined,
         },
       },
-      [hdrBuf, sdrBuf],
+      files.map((f) => f.buffer),
     );
   };
 
   const handleMotion = async () => {
-    if (!motionInputs.photo || !motionInputs.video) {
+    if (motionFiles.length !== 2) {
       setStatus({ key: "statusNeedPhotoVideo" });
       setLog((prev) => [...prev, t("statusNeedPhotoVideo")]);
       return;
@@ -172,14 +233,17 @@ export default function App() {
     setOutputUrl(null);
     setLog([]);
     setStatus({ key: "statusPreparing" });
-    const photoBuf = await motionInputs.photo.arrayBuffer();
-    const videoBuf = await motionInputs.video.arrayBuffer();
+    const selected = motionFiles.slice(0, 2);
+    const buffers = await Promise.all(selected.map((f) => f.arrayBuffer()));
+    const files = selected.map((f, idx) => ({
+      name: f.name || `file${idx + 1}`,
+      buffer: buffers[idx],
+    }));
     const outName = (motionOutName || "").trim() || motionDefaultOut;
     worker.postMessage(
       {
         type: "motion",
-        photo: photoBuf,
-        video: videoBuf,
+        files,
         opts: {
           outName,
           timestampUs: motionInputs.timestampUs
@@ -187,7 +251,7 @@ export default function App() {
             : undefined,
         },
       },
-      [photoBuf, videoBuf],
+      files.map((f) => f.buffer),
     );
   };
 
@@ -268,39 +332,15 @@ export default function App() {
               <div className="space-y-3">
                 <Label
                   className="flex items-center gap-2"
-                  title={t("tooltipInputA")}
+                  title={t("tooltipInputPair")}
                 >
-                  <Upload className="h-4 w-4" /> {t("inputA")}
+                  <Upload className="h-4 w-4" /> {t("inputPair")}
                 </Label>
                 <Input
                   type="file"
                   accept="image/jpeg"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] || null;
-                    setBakeInputs((s) => ({ ...s, hdr: file }));
-                    if (file) {
-                      const url = URL.createObjectURL(file);
-                      setPreviews((p) => ({ ...p, a: url }));
-                    }
-                  }}
-                />
-                <Label
-                  className="flex items-center gap-2"
-                  title={t("tooltipInputB")}
-                >
-                  <Upload className="h-4 w-4" /> {t("inputB")}
-                </Label>
-                <Input
-                  type="file"
-                  accept="image/jpeg"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] || null;
-                    setBakeInputs((s) => ({ ...s, sdr: file }));
-                    if (file) {
-                      const url = URL.createObjectURL(file);
-                      setPreviews((p) => ({ ...p, b: url }));
-                    }
-                  }}
+                  multiple
+                  onChange={(e) => handleBakeFiles(e.target.files)}
                 />
                 <div className="grid grid-cols-2 gap-2">
                   {previews.a && (
@@ -458,35 +498,15 @@ export default function App() {
               <div className="space-y-3">
                 <Label
                   className="flex items-center gap-2"
-                  title={t("tooltipMotionPhoto")}
+                  title={t("tooltipMotionPair")}
                 >
-                  <Upload className="h-4 w-4" /> {t("motionPhoto")}
+                  <Upload className="h-4 w-4" /> {t("motionPair")}
                 </Label>
                 <Input
                   type="file"
-                  accept="image/jpeg"
-                  onChange={(e) =>
-                    setMotionInputs((s) => ({
-                      ...s,
-                      photo: e.target.files?.[0] || null,
-                    }))
-                  }
-                />
-                <Label
-                  className="flex items-center gap-2"
-                  title={t("tooltipMotionVideo")}
-                >
-                  <Upload className="h-4 w-4" /> {t("motionVideo")}
-                </Label>
-                <Input
-                  type="file"
-                  accept="video/mp4"
-                  onChange={(e) =>
-                    setMotionInputs((s) => ({
-                      ...s,
-                      video: e.target.files?.[0] || null,
-                    }))
-                  }
+                  accept="image/jpeg,video/mp4,video/quicktime,video/*"
+                  multiple
+                  onChange={(e) => handleMotionFiles(e.target.files)}
                 />
                 <div>
                   <Label title={t("tooltipTimestamp")}>{t("timestamp")}</Label>

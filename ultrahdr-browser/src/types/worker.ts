@@ -5,10 +5,14 @@ export type WorkerStatus =
   | { type: "done"; payload: { fileName: string; buffer: ArrayBuffer } }
   | { type: "error"; payload: string };
 
+export type InFile = {
+  name: string;
+  buffer: ArrayBuffer;
+};
+
 export type BakeRequest = {
   type: "bake";
-  hdr: ArrayBuffer;
-  sdr: ArrayBuffer;
+  files: InFile[];
   opts: {
     outName: string;
     baseQ: number;
@@ -21,8 +25,7 @@ export type BakeRequest = {
 
 export type MotionRequest = {
   type: "motion";
-  photo: ArrayBuffer;
-  video: ArrayBuffer;
+  files: InFile[];
   opts: {
     outName: string;
     timestampUs?: number;
