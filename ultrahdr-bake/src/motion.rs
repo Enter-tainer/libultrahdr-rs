@@ -113,9 +113,6 @@ fn auto_detect_motion_pair(a: &Path, b: &Path) -> Result<MotionInputPair> {
         (MediaKind::Mp4, MediaKind::Mp4) => {
             bail!("Both inputs look like MP4s; please specify --photo for the JPEG explicitly")
         }
-        _ => bail!(
-            "Could not auto-detect photo vs video; please provide --photo and --video explicitly"
-        ),
     }
 }
 
