@@ -74,12 +74,7 @@ async function runMotion(req: Extract<WorkerRequest, { type: "motion" }>) {
     writeFile(SAFE_MOTION_NAMES[i], new Uint8Array(files[i].buffer));
   }
 
-  const args = [
-    "ultrahdr-bake.wasm",
-    "motion",
-    "--out",
-    req.opts.outName,
-  ];
+  const args = ["ultrahdr-bake.wasm", "motion", "--out", req.opts.outName];
   if (req.opts.timestampUs !== undefined) {
     args.push("--timestamp-us", req.opts.timestampUs.toString());
   }

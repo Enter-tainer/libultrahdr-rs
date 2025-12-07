@@ -294,7 +294,8 @@ const translations: TranslationDict = {
     tooltipInputA: "HDR 또는 SDR JPEG 업로드. B와 함께 순서를 자동 감지합니다.",
     tooltipInputB: "두 번째 HDR/SDR JPEG 업로드. 순서 자동 감지.",
     inputPair: "입력 JPEG (2개 선택)",
-    tooltipInputPair: "HDR/SDR JPEG 두 장을 한 번에 업로드하세요. 순서는 자동 판단합니다.",
+    tooltipInputPair:
+      "HDR/SDR JPEG 두 장을 한 번에 업로드하세요. 순서는 자동 판단합니다.",
     tooltipBaseQuality: "베이스 SDR 레이어의 JPEG 품질 (1-100).",
     tooltipGainmapQuality: "게인맵 JPEG 품질 (1-100).",
     tooltipScale:
@@ -315,7 +316,8 @@ const translations: TranslationDict = {
     tooltipMotionPhoto: "모션 포토의 정지 JPEG 프레임을 업로드하세요.",
     tooltipMotionVideo: "삽입할 짧은 MP4 클립을 업로드하세요.",
     motionPair: "사진 + 영상 (2개 선택)",
-    tooltipMotionPair: "JPEG 사진과 MP4/MOV를 한 번에 업로드하면 유형을 자동 인식합니다.",
+    tooltipMotionPair:
+      "JPEG 사진과 MP4/MOV를 한 번에 업로드하면 유형을 자동 인식합니다.",
     tooltipTimestamp: "선택: 모션 시작 마이크로초 오프셋(기본 0).",
     buildMotion: "모션 포토 생성",
     motionAlt: "모션 포토",
