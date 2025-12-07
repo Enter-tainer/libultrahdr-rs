@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use ultrahdr::{CompressedImage, Decoder, Encoder, ImgLabel, sys};
@@ -6,7 +6,11 @@ use ultrahdr::{CompressedImage, Decoder, Encoder, ImgLabel, sys};
 use crate::color::{detect_icc_color_gamut, gamut_label};
 use crate::detect::probe_gainmap_metadata;
 
-pub fn run_encoding(args: &crate::cli::BakeArgs, inputs: &crate::detect::InputPair) -> Result<()> {
+pub fn run_encoding(
+    args: &crate::cli::BakeArgs,
+    inputs: &crate::detect::InputPair,
+    out_path: &Path,
+) -> Result<()> {
     if let Some(target_peak) = args.target_peak_nits.as_ref() {
         ensure!(
             *target_peak > 0.0,
@@ -89,9 +93,9 @@ pub fn run_encoding(args: &crate::cli::BakeArgs, inputs: &crate::detect::InputPa
         .encoded_stream()
         .context("Encode returned null output")?;
     let out_bytes = out_view.bytes()?;
-    fs::write(&args.out, out_bytes)
-        .with_context(|| format!("Failed to write output {}", args.out.display()))?;
+    fs::write(out_path, out_bytes)
+        .with_context(|| format!("Failed to write output {}", out_path.display()))?;
 
-    println!("Wrote {}", args.out.display());
+    println!("Wrote {}", out_path.display());
     Ok(())
 }

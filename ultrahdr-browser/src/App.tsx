@@ -33,6 +33,27 @@ const worker = new Worker(new URL("./worker.ts", import.meta.url), {
   type: "module",
 });
 
+function appendSuffix(filename: string, suffix: string, fallbackExt: string) {
+  const lastDot = filename.lastIndexOf(".");
+  if (lastDot > 0 && lastDot < filename.length - 1) {
+    const base = filename.slice(0, lastDot);
+    const ext = filename.slice(lastDot);
+    return `${base}${suffix}${ext}`;
+  }
+  return `${filename}${suffix}.${fallbackExt}`;
+}
+
+function defaultBakeOutName(sdr: File | null) {
+  if (sdr?.name) {
+    return appendSuffix(sdr.name, "-merge", "jpg");
+  }
+  return "ultrahdr_bake_out.jpg";
+}
+
+function defaultMotionOutName(_photo: File | null) {
+  return "motionphoto.jpg";
+}
+
 export default function App() {
   const { t, translateStatus, lang, setLang } = useI18n();
   const [mode, setMode] = React.useState<Mode>("bake");
@@ -42,6 +63,8 @@ export default function App() {
   const [log, setLog] = React.useState<string[]>([]);
   const [outputUrl, setOutputUrl] = React.useState<string | null>(null);
   const [outputName, setOutputName] = React.useState<string | null>(null);
+  const [bakeOutName, setBakeOutName] = React.useState<string>("");
+  const [motionOutName, setMotionOutName] = React.useState<string>("");
   const [previews, setPreviews] = React.useState<{ a?: string; b?: string }>(
     {},
   );
@@ -60,6 +83,14 @@ export default function App() {
     video: null as File | null,
     timestampUs: "",
   });
+  const bakeDefaultOut = React.useMemo(
+    () => defaultBakeOutName(bakeInputs.sdr),
+    [bakeInputs.sdr],
+  );
+  const motionDefaultOut = React.useMemo(
+    () => defaultMotionOutName(motionInputs.photo),
+    [motionInputs.photo],
+  );
   const resolvedStatus = React.useMemo(
     () => (status.key ? t(status.key, status.params) : status.text || ""),
     [status, t],
@@ -108,13 +139,14 @@ export default function App() {
     setStatus({ key: "statusPreparing" });
     const hdrBuf = await bakeInputs.hdr.arrayBuffer();
     const sdrBuf = await bakeInputs.sdr.arrayBuffer();
+    const outName = (bakeOutName || "").trim() || bakeDefaultOut;
     worker.postMessage(
       {
         type: "bake",
         hdr: hdrBuf,
         sdr: sdrBuf,
         opts: {
-          outName: "ultrahdr_bake_out.jpg",
+          outName,
           baseQ: bakeInputs.baseQ,
           gainmapQ: bakeInputs.gainmapQ,
           scale: bakeInputs.scale,
@@ -139,13 +171,14 @@ export default function App() {
     setStatus({ key: "statusPreparing" });
     const photoBuf = await motionInputs.photo.arrayBuffer();
     const videoBuf = await motionInputs.video.arrayBuffer();
+    const outName = (motionOutName || "").trim() || motionDefaultOut;
     worker.postMessage(
       {
         type: "motion",
         photo: photoBuf,
         video: videoBuf,
         opts: {
-          outName: "motionphoto.jpg",
+          outName,
           timestampUs: motionInputs.timestampUs
             ? Number(motionInputs.timestampUs)
             : undefined,
@@ -369,6 +402,14 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-3">
+                <div>
+                  <Label title={t("outputName")}>{t("outputName")}</Label>
+                  <Input
+                    value={bakeOutName}
+                    placeholder={bakeDefaultOut}
+                    onChange={(e) => setBakeOutName(e.target.value)}
+                  />
+                </div>
                 <Button onClick={handleBake} className="w-full">
                   {t("runBake")}
                 </Button>
@@ -381,10 +422,12 @@ export default function App() {
                 {outputUrl && (
                   <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm text-slate-300">{outputName}</p>
+                      <p className="text-sm text-slate-300">
+                        {outputName || bakeDefaultOut}
+                      </p>
                       <a
                         href={outputUrl}
-                        download={outputName || "ultrahdr_bake_out.jpg"}
+                        download={outputName || bakeDefaultOut}
                         className="text-primary underline"
                       >
                         {t("download")}
@@ -459,6 +502,14 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-3">
+                <div>
+                  <Label title={t("outputName")}>{t("outputName")}</Label>
+                  <Input
+                    value={motionOutName}
+                    placeholder={motionDefaultOut}
+                    onChange={(e) => setMotionOutName(e.target.value)}
+                  />
+                </div>
                 <Button onClick={handleMotion} className="w-full">
                   {t("buildMotion")}
                 </Button>
@@ -471,10 +522,12 @@ export default function App() {
                 {outputUrl && (
                   <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm text-slate-300">{outputName}</p>
+                      <p className="text-sm text-slate-300">
+                        {outputName || motionDefaultOut}
+                      </p>
                       <a
                         href={outputUrl}
-                        download={outputName || "motionphoto.jpg"}
+                        download={outputName || motionDefaultOut}
                         className="text-primary underline"
                       >
                         {t("download")}

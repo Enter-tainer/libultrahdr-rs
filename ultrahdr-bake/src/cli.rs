@@ -54,9 +54,9 @@ pub struct BakeArgs {
         short = 'o',
         value_hint = ValueHint::FilePath,
         value_name = "FILE",
-        default_value = "ultrahdr_bake_out.jpg"
+        help = "Defaults to <SDR-filename>-merge.<ext> when omitted"
     )]
-    pub out: PathBuf,
+    pub out: Option<PathBuf>,
 
     /// JPEG quality for the SDR base image (1-100)
     #[arg(

@@ -1,3 +1,8 @@
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Result, ensure};
 use clap::Parser;
 
@@ -21,8 +26,30 @@ fn run(cmd: cli::Command) -> Result<()> {
             );
 
             let inputs = detect::resolve_inputs(&args)?;
-            encode::run_encoding(&args, &inputs)
+            let out_path = resolve_out_path(&args, &inputs);
+            encode::run_encoding(&args, &inputs, &out_path)
         }
         cli::Command::Motion(args) => motion::run_motion(&args),
     }
+}
+
+fn resolve_out_path(args: &cli::BakeArgs, inputs: &detect::InputPair) -> PathBuf {
+    args.out
+        .clone()
+        .unwrap_or_else(|| default_out_for_sdr(&inputs.sdr))
+}
+
+fn default_out_for_sdr(sdr_path: &Path) -> PathBuf {
+    let parent = sdr_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = sdr_path.file_stem().unwrap_or_else(|| OsStr::new("sdr"));
+    let ext = sdr_path.extension().unwrap_or_else(|| OsStr::new("jpg"));
+
+    let mut filename = stem.to_os_string();
+    filename.push("-merge");
+    filename.push(".");
+    filename.push(ext);
+
+    let mut out = parent.to_path_buf();
+    out.push(filename);
+    out
 }
