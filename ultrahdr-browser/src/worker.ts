@@ -28,17 +28,8 @@ function emit(msg: WorkerStatus) {
   postMessage(msg);
 }
 
-function normalizeNames(
-  files: { name: string; buffer: ArrayBuffer }[],
-  fallbackExt: string,
-) {
-  return files.map((file, idx) => {
-    const name = file.name && file.name.trim().length > 0
-      ? file.name
-      : `input${idx + 1}.${fallbackExt}`;
-    return { name, buffer: file.buffer };
-  });
-}
+const SAFE_BAKE_NAMES = ["input1.jpg", "input2.jpg"];
+const SAFE_MOTION_NAMES = ["motion1.bin", "motion2.bin"];
 
 async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
   emit({ type: "status", payload: "Preparing WASI FS…" });
@@ -46,9 +37,9 @@ async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
   if (req.files.length !== 2) {
     throw new Error("Need exactly two JPEG inputs");
   }
-  const files = normalizeNames(req.files, "jpg").slice(0, 2);
-  for (const file of files) {
-    writeFile(file.name, new Uint8Array(file.buffer));
+  const files = req.files.slice(0, 2);
+  for (let i = 0; i < files.length; i++) {
+    writeFile(SAFE_BAKE_NAMES[i], new Uint8Array(files[i].buffer));
   }
 
   const args = [
@@ -67,7 +58,7 @@ async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
     args.push("--target-peak", req.opts.targetPeak.toString());
   }
   // Always rely on CLI auto-detection: provide two positional inputs.
-  args.push(files[0].name, files[1].name);
+  args.push(SAFE_BAKE_NAMES[0], SAFE_BAKE_NAMES[1]);
 
   await runCli(args, req.opts.outName);
 }
@@ -78,9 +69,9 @@ async function runMotion(req: Extract<WorkerRequest, { type: "motion" }>) {
   if (req.files.length !== 2) {
     throw new Error("Need exactly two inputs (photo + video)");
   }
-  const files = normalizeNames(req.files, "bin").slice(0, 2);
-  for (const file of files) {
-    writeFile(file.name, new Uint8Array(file.buffer));
+  const files = req.files.slice(0, 2);
+  for (let i = 0; i < files.length; i++) {
+    writeFile(SAFE_MOTION_NAMES[i], new Uint8Array(files[i].buffer));
   }
 
   const args = [
@@ -92,7 +83,7 @@ async function runMotion(req: Extract<WorkerRequest, { type: "motion" }>) {
   if (req.opts.timestampUs !== undefined) {
     args.push("--timestamp-us", req.opts.timestampUs.toString());
   }
-  args.push(files[0].name, files[1].name);
+  args.push(SAFE_MOTION_NAMES[0], SAFE_MOTION_NAMES[1]);
 
   await runCli(args, req.opts.outName);
 }

@@ -102,9 +102,14 @@ export default function App() {
   const [outputName, setOutputName] = React.useState<string | null>(null);
   const [bakeOutName, setBakeOutName] = React.useState<string>("");
   const [motionOutName, setMotionOutName] = React.useState<string>("");
-  const [previews, setPreviews] = React.useState<{ a?: string; b?: string }>(
-    {},
-  );
+  const [bakePreviews, setBakePreviews] = React.useState<{
+    a?: string;
+    b?: string;
+  }>({});
+  const [motionPreviews, setMotionPreviews] = React.useState<{
+    a?: string;
+    b?: string;
+  }>({});
 
   const [bakeInputs, setBakeInputs] = React.useState({
     baseQ: 95,
@@ -130,6 +135,27 @@ export default function App() {
     () => (status.key ? t(status.key, status.params) : status.text || ""),
     [status, t],
   );
+
+  const renderMotionPreview = (slot: 0 | 1) => {
+    const url = slot === 0 ? motionPreviews.a : motionPreviews.b;
+    if (!url) return null;
+    const file = motionFiles[slot];
+    const kind = file ? detectMediaKind(file) : "unknown";
+    const commonClass = "w-full rounded-lg border border-slate-800";
+    if (kind === "video") {
+      return (
+        <video
+          src={url}
+          className={commonClass}
+          controls
+          playsInline
+          muted
+          loop
+        />
+      );
+    }
+    return <img src={url} alt={t("previewA")} className={commonClass} />;
+  };
 
   React.useEffect(() => {
     worker.onmessage = (event: MessageEvent<WorkerStatus>) => {
@@ -166,7 +192,7 @@ export default function App() {
   const handleBakeFiles = (list: FileList | null) => {
     const files = Array.from(list || []).slice(0, 2);
     setBakeFiles(files);
-    setPreviews((p) => {
+    setBakePreviews((p) => {
       if (p.a) URL.revokeObjectURL(p.a);
       if (p.b) URL.revokeObjectURL(p.b);
       return {
@@ -179,7 +205,7 @@ export default function App() {
   const handleMotionFiles = (list: FileList | null) => {
     const files = Array.from(list || []).slice(0, 2);
     setMotionFiles(files);
-    setPreviews((p) => {
+    setMotionPreviews((p) => {
       if (p.a) URL.revokeObjectURL(p.a);
       if (p.b) URL.revokeObjectURL(p.b);
       return {
@@ -343,16 +369,16 @@ export default function App() {
                   onChange={(e) => handleBakeFiles(e.target.files)}
                 />
                 <div className="grid grid-cols-2 gap-2">
-                  {previews.a && (
+                  {bakePreviews.a && (
                     <img
-                      src={previews.a}
+                      src={bakePreviews.a}
                       alt={t("previewA")}
                       className="w-full rounded-lg border border-slate-800"
                     />
                   )}
-                  {previews.b && (
+                  {bakePreviews.b && (
                     <img
-                      src={previews.b}
+                      src={bakePreviews.b}
                       alt={t("previewB")}
                       className="w-full rounded-lg border border-slate-800"
                     />
@@ -508,6 +534,10 @@ export default function App() {
                   multiple
                   onChange={(e) => handleMotionFiles(e.target.files)}
                 />
+                <div className="grid grid-cols-2 gap-2">
+                  {renderMotionPreview(0)}
+                  {renderMotionPreview(1)}
+                </div>
                 <div>
                   <Label title={t("tooltipTimestamp")}>{t("timestamp")}</Label>
                   <Input
