@@ -50,7 +50,10 @@ function defaultBakeOutName(sdr: File | null) {
   return "ultrahdr_bake_out.jpg";
 }
 
-function defaultMotionOutName(_photo: File | null) {
+function defaultMotionOutName(photo: File | null) {
+  if (photo?.name) {
+    return appendSuffix(photo.name, "-motion", "jpg");
+  }
   return "motionphoto.jpg";
 }
 

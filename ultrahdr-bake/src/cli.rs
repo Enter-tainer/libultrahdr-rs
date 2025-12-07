@@ -94,13 +94,17 @@ pub struct BakeArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct MotionArgs {
+    /// Two inputs; auto-detect which is JPEG photo vs MP4 video
+    #[arg(value_name = "FILE", value_hint = ValueHint::FilePath, num_args = 0..=2)]
+    pub inputs: Vec<PathBuf>,
+
     /// Still JPEG to act as the Motion Photo primary image
     #[arg(long, short = 'p', value_hint = ValueHint::FilePath, value_name = "JPEG")]
-    pub photo: PathBuf,
+    pub photo: Option<PathBuf>,
 
     /// MP4 clip to append to the Motion Photo
     #[arg(long, short = 'v', value_hint = ValueHint::FilePath, value_name = "MP4")]
-    pub video: PathBuf,
+    pub video: Option<PathBuf>,
 
     /// Output Motion Photo JPEG path
     #[arg(
@@ -108,9 +112,9 @@ pub struct MotionArgs {
         short = 'o',
         value_hint = ValueHint::FilePath,
         value_name = "FILE",
-        default_value = "motionphoto.jpg"
+        help = "Defaults to <photo-filename>-motion.<ext> when omitted"
     )]
-    pub out: PathBuf,
+    pub out: Option<PathBuf>,
 
     /// Presentation timestamp (microseconds) for the still frame within the motion clip
     #[arg(long = "timestamp-us", default_value_t = 0)]

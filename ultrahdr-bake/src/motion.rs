@@ -1,6 +1,10 @@
-use std::fs;
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use bytes::{Bytes, BytesMut};
 use img_parts::jpeg::{Jpeg, JpegSegment, markers};
 use quick_xml::{
@@ -13,14 +17,43 @@ use crate::detect::probe_gainmap_metadata;
 
 const XMP_PREFIX: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
-pub fn run_motion(args: &MotionArgs) -> Result<()> {
-    let photo_bytes = fs::read(&args.photo)
-        .with_context(|| format!("Failed to read photo {}", args.photo.display()))?;
-    let video_bytes = fs::read(&args.video)
-        .with_context(|| format!("Failed to read video {}", args.video.display()))?;
+#[derive(Debug, Clone)]
+pub struct MotionInputPair {
+    pub photo: PathBuf,
+    pub video: PathBuf,
+}
+
+pub fn resolve_inputs(args: &MotionArgs) -> Result<MotionInputPair> {
+    if args.photo.is_some() || args.video.is_some() {
+        ensure!(
+            args.photo.is_some() && args.video.is_some(),
+            "Provide both --photo and --video together (or omit both to auto-detect)"
+        );
+        ensure!(
+            args.inputs.is_empty(),
+            "Provide --photo/--video without positional inputs, or two positional inputs without flags"
+        );
+        return Ok(MotionInputPair {
+            photo: args.photo.clone().expect("photo is_some checked"),
+            video: args.video.clone().expect("video is_some checked"),
+        });
+    }
+
+    ensure!(
+        args.inputs.len() == 2,
+        "Provide --photo and --video, or two positional inputs for auto-detection"
+    );
+    auto_detect_motion_pair(&args.inputs[0], &args.inputs[1])
+}
+
+pub fn run_motion(args: &MotionArgs, inputs: &MotionInputPair, out_path: &Path) -> Result<()> {
+    let photo_bytes = fs::read(&inputs.photo)
+        .with_context(|| format!("Failed to read photo {}", inputs.photo.display()))?;
+    let video_bytes = fs::read(&inputs.video)
+        .with_context(|| format!("Failed to read video {}", inputs.video.display()))?;
 
     let mut base_jpeg = Jpeg::from_bytes(Bytes::copy_from_slice(&photo_bytes))
-        .with_context(|| format!("Failed to parse JPEG {}", args.photo.display()))?;
+        .with_context(|| format!("Failed to parse JPEG {}", inputs.photo.display()))?;
     let existing_xmp = take_existing_xmp(base_jpeg.segments_mut());
 
     let mut probe_buf = photo_bytes.clone();
@@ -47,11 +80,10 @@ pub fn run_motion(args: &MotionArgs) -> Result<()> {
     out.extend_from_slice(&primary_bytes);
     out.extend_from_slice(&video_bytes);
 
-    fs::write(&args.out, &out)
-        .with_context(|| format!("Failed to write {}", args.out.display()))?;
+    fs::write(out_path, &out).with_context(|| format!("Failed to write {}", out_path.display()))?;
     println!(
         "Wrote Motion Photo {} (JPEG {} bytes{}video {} bytes, offset {})",
-        args.out.display(),
+        out_path.display(),
         primary_bytes.len(),
         meta.gainmap_len
             .map(|n| format!(", gain map {} bytes, ", n))
@@ -60,6 +92,64 @@ pub fn run_motion(args: &MotionArgs) -> Result<()> {
         primary_bytes.len()
     );
     Ok(())
+}
+
+fn auto_detect_motion_pair(a: &Path, b: &Path) -> Result<MotionInputPair> {
+    let a_kind = detect_media_kind(a)?;
+    let b_kind = detect_media_kind(b)?;
+
+    match (a_kind, b_kind) {
+        (MediaKind::Jpeg, MediaKind::Mp4) => Ok(MotionInputPair {
+            photo: a.to_path_buf(),
+            video: b.to_path_buf(),
+        }),
+        (MediaKind::Mp4, MediaKind::Jpeg) => Ok(MotionInputPair {
+            photo: b.to_path_buf(),
+            video: a.to_path_buf(),
+        }),
+        (MediaKind::Jpeg, MediaKind::Jpeg) => {
+            bail!("Both inputs look like JPEGs; please specify --video for the MP4 explicitly")
+        }
+        (MediaKind::Mp4, MediaKind::Mp4) => {
+            bail!("Both inputs look like MP4s; please specify --photo for the JPEG explicitly")
+        }
+        _ => bail!(
+            "Could not auto-detect photo vs video; please provide --photo and --video explicitly"
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaKind {
+    Jpeg,
+    Mp4,
+}
+
+fn detect_media_kind(path: &Path) -> Result<MediaKind> {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let lower = ext.to_ascii_lowercase();
+        if lower == "jpg" || lower == "jpeg" {
+            return Ok(MediaKind::Jpeg);
+        }
+        if lower == "mp4" || lower == "m4v" || lower == "mov" || lower == "qt" {
+            return Ok(MediaKind::Mp4);
+        }
+    }
+
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("Failed to open {} for type detection", path.display()))?;
+    let mut buf = [0u8; 12];
+    let n = file
+        .read(&mut buf)
+        .with_context(|| format!("Failed to read {} for type detection", path.display()))?;
+    if n >= 3 && buf[0] == 0xFF && buf[1] == 0xD8 && buf[2] == 0xFF {
+        return Ok(MediaKind::Jpeg);
+    }
+    if n >= 8 && &buf[4..8] == b"ftyp" {
+        return Ok(MediaKind::Mp4);
+    }
+
+    bail!("Unrecognized media type for {}", path.display())
 }
 
 fn build_plain_motion(
