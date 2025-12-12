@@ -1,7 +1,42 @@
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let file_name = entry.file_name();
+        if file_name.to_str() == Some(".git") {
+            continue;
+        }
+        let src_path = entry.path();
+        let dst_path = dst.join(file_name);
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path)?;
+        } else if file_type.is_symlink() {
+            let target = fs::read_link(&src_path)?;
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&target, &dst_path)?;
+            }
+            #[cfg(windows)]
+            {
+                if target.is_dir() {
+                    std::os::windows::fs::symlink_dir(&target, &dst_path)?;
+                } else {
+                    std::os::windows::fs::symlink_file(&target, &dst_path)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 fn wasi_toolchain() -> Option<(PathBuf, PathBuf)> {
     let target = env::var("TARGET").ok()?;
@@ -113,23 +148,42 @@ fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
     );
 }
 
+fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathBuf {
+    let work_src = out_dir.join("libultrahdr-src");
+    let _ = fs::remove_dir_all(&work_src);
+    copy_dir_recursive(src_dir, &work_src).expect("failed to copy libultrahdr sources");
+    apply_local_patches(manifest_dir, &work_src);
+    work_src
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let src_dir = locate_src_dir(&manifest_dir);
-    if !src_dir.join("CMakeLists.txt").is_file() {
+    let source_dir = locate_src_dir(&manifest_dir);
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    if !source_dir.join("CMakeLists.txt").is_file() {
         panic!(
             "Could not find libultrahdr sources; set ULTRAHDR_SRC_DIR (current: {})",
-            src_dir.display()
+            source_dir.display()
         );
     }
 
     let patch_path = manifest_dir.join("patches/libultrahdr-no-threads.patch");
-    apply_local_patches(&manifest_dir, &src_dir);
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SKIP_PATCHES");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PREFIX");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PATH");
     println!("cargo:rerun-if-env-changed=WASI_SDK_TOOLCHAIN_FILE");
+    println!(
+        "cargo:rerun-if-changed={}",
+        source_dir.join("ultrahdr_api.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        source_dir.join("CMakeLists.txt").display()
+    );
+    println!("cargo:rerun-if-changed={}", patch_path.display());
+
+    let src_dir = prepare_src_dir(&manifest_dir, &source_dir, &out_dir);
 
     let target = env::var("TARGET").expect("TARGET");
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -218,8 +272,6 @@ fn main() {
     cfg.build_target(cmake_target);
 
     let dst = cfg.build();
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-
     // Link search paths (CMake binary dir holds libs when install is disabled).
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-search=native={}/lib64", dst.display());
@@ -287,13 +339,6 @@ fn main() {
             println!("cargo:rustc-link-lib={}", cxx_stdlib);
         }
     }
-
-    // Re-run if the public header changes.
-    println!(
-        "cargo:rerun-if-changed={}",
-        src_dir.join("ultrahdr_api.h").display()
-    );
-    println!("cargo:rerun-if-changed={}", patch_path.display());
 
     let bindgen_target = if is_wasm {
         "i686-unknown-linux-gnu"
