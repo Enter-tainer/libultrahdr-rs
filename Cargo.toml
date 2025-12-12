@@ -9,6 +9,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/Enter-tainer/libultrahdr-rs"
 homepage = "https://github.com/Enter-tainer/libultrahdr-rs"
+authors = ["Wenzhuo Liu <lwzbill@foxmail.com>"]
 keywords = ["hdr", "jpeg", "gainmap", "image"]
 categories = ["multimedia::images", "external-ffi-bindings"]
 

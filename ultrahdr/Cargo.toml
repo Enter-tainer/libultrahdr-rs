@@ -9,6 +9,11 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Safe-ish Rust wrapper around libultrahdr"
+exclude = [
+  "/target",
+  "/CMakeFiles",
+  "/artifacts",
+]
 
 [features]
 default = ["vendored", "iso21496"]

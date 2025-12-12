@@ -11,6 +11,13 @@ categories.workspace = true
 links = "uhdr"
 build = "build.rs"
 description = "Raw FFI bindings to libultrahdr"
+exclude = [
+  "/target",
+  "/CMakeFiles",
+  "/artifacts",
+  "/libultrahdr/build",
+  "/libultrahdr/CMakeFiles",
+]
 
 [features]
 default = ["vendored", "iso21496"]
