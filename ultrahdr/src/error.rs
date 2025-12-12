@@ -3,12 +3,16 @@ use std::error::Error as StdError;
 use std::ffi::CStr;
 use std::fmt;
 
+/// Error produced by the safe wrappers around `libultrahdr`.
 #[derive(Debug, Clone)]
 pub struct Error {
+    /// Error code returned by `libultrahdr`.
     pub code: sys::uhdr_codec_err_t,
+    /// Optional human-readable detail string when provided by the library.
     pub detail: Option<String>,
 }
 
+/// Result alias used throughout the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {

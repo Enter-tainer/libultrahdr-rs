@@ -4,27 +4,40 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 
-// Re-export common enums so callers don't need to depend on sys directly.
+/// Pixel layout for packed buffers accepted/returned by libultrahdr.
 pub type ImgFormat = sys::uhdr_img_fmt_t;
+/// Scene-referred color gamut.
 pub type ColorGamut = sys::uhdr_color_gamut_t;
+/// Transfer function describing the relationship between encoded values and scene light.
 pub type ColorTransfer = sys::uhdr_color_transfer_t;
+/// Chroma sample range.
 pub type ColorRange = sys::uhdr_color_range_t;
+/// Output codec to write.
 pub type Codec = sys::uhdr_codec_t;
+/// Whether an image is the base view or the gain map.
 pub type ImgLabel = sys::uhdr_img_label_t;
+/// Encoder tuning preset.
 pub type EncPreset = sys::uhdr_enc_preset_t;
+/// Error codes returned by the underlying C API.
 pub type ErrorCode = sys::uhdr_codec_err_t;
 
 /// Nominal SDR diffuse white used by libultrahdr for capacity math (ISO/TS 22028-5).
 pub const SDR_WHITE_NITS: f32 = 203.0;
 
+/// Owned compressed JPEG (and optional gain-map) returned by an [`Encoder`].
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
+    /// Encoded byte stream.
     pub data: Vec<u8>,
+    /// Color gamut of the encoded stream.
     pub cg: ColorGamut,
+    /// Transfer function of the encoded stream.
     pub ct: ColorTransfer,
+    /// Chroma range of the encoded stream.
     pub range: ColorRange,
 }
 
+/// Borrowed view over an encoded stream owned by an [`Encoder`] or [`Decoder`].
 #[derive(Debug, Copy, Clone)]
 pub struct EncodedView<'a> {
     inner: &'a sys::uhdr_compressed_image,
@@ -35,6 +48,7 @@ impl<'a> EncodedView<'a> {
         Self { inner }
     }
 
+    /// Return the JPEG/gain-map bytes.
     pub fn bytes(&self) -> Result<&'a [u8]> {
         if self.inner.data.is_null() {
             return Err(Error::invalid_param("null compressed data"));
@@ -48,10 +62,12 @@ impl<'a> EncodedView<'a> {
         Ok(slice)
     }
 
+    /// Color metadata attached to the encoded stream.
     pub fn meta(&self) -> (ColorGamut, ColorTransfer, ColorRange) {
         (self.inner.cg, self.inner.ct, self.inner.range)
     }
 
+    /// Copy the stream into an owned buffer.
     pub fn to_owned(&self) -> Result<EncodedImage> {
         let data = copy_compressed_image(self.inner)?;
         let (cg, ct, range) = self.meta();
@@ -64,18 +80,27 @@ impl<'a> EncodedView<'a> {
     }
 }
 
+/// Owned packed pixels plus metadata returned by a [`Decoder`].
 #[derive(Debug, Clone)]
 pub struct DecodedPacked {
+    /// Output pixel layout.
     pub fmt: ImgFormat,
+    /// Output color gamut.
     pub cg: ColorGamut,
+    /// Output transfer function.
     pub ct: ColorTransfer,
+    /// Output chroma range.
     pub range: ColorRange,
+    /// Logical width in pixels.
     pub width: u32,
+    /// Logical height in pixels.
     pub height: u32,
+    /// Pixel buffer tightly packed to width.
     pub data: Vec<u8>,
 }
 
 impl DecodedPacked {
+    /// Re-expose the owned pixels as a [`RawImage`] descriptor.
     pub fn as_raw_image(&mut self) -> Result<RawImage<'_>> {
         RawImage::packed(
             self.fmt,
@@ -97,6 +122,7 @@ pub struct OwnedPackedImage {
 }
 
 impl OwnedPackedImage {
+    /// Allocate a new packed buffer sized for `width`×`height` pixels in the given format.
     pub fn new(
         fmt: ImgFormat,
         width: u32,
@@ -134,27 +160,33 @@ impl OwnedPackedImage {
         &mut self.raw
     }
 
+    /// Mutable access to the backing pixel buffer.
     pub fn buffer(&mut self) -> &mut [u8] {
         &mut self.buf
     }
 
+    /// Logical width in pixels.
     pub fn width(&self) -> u32 {
         self.raw.w
     }
 
+    /// Logical height in pixels.
     pub fn height(&self) -> u32 {
         self.raw.h
     }
 
+    /// Pixel layout.
     pub fn fmt(&self) -> ImgFormat {
         self.raw.fmt
     }
 
+    /// Color metadata.
     pub fn meta(&self) -> (ColorGamut, ColorTransfer, ColorRange) {
         (self.raw.cg, self.raw.ct, self.raw.range)
     }
 }
 
+/// Borrowed view over packed pixels owned by a [`Decoder`].
 pub struct DecodedPackedView<'a> {
     img: &'a mut sys::uhdr_raw_image,
     bpp: usize,
@@ -166,22 +198,27 @@ impl<'a> DecodedPackedView<'a> {
         Ok(Self { img, bpp })
     }
 
+    /// Logical width in pixels.
     pub fn width(&self) -> u32 {
         self.img.w
     }
 
+    /// Logical height in pixels.
     pub fn height(&self) -> u32 {
         self.img.h
     }
 
+    /// Pixel layout of the view.
     pub fn fmt(&self) -> ImgFormat {
         self.img.fmt
     }
 
+    /// Color metadata of the view.
     pub fn meta(&self) -> (ColorGamut, ColorTransfer, ColorRange) {
         (self.img.cg, self.img.ct, self.img.range)
     }
 
+    /// Borrow a single packed row by index.
     pub fn row(&self, y: usize) -> Result<&'a [u8]> {
         let img: &sys::uhdr_raw_image = &*self.img;
         if y as u32 >= img.h {
@@ -209,14 +246,17 @@ impl<'a> DecodedPackedView<'a> {
         Ok(slice)
     }
 
+    /// Override the color gamut metadata attached to this view.
     pub fn set_color_gamut(&mut self, cg: ColorGamut) {
         self.img.cg = cg;
     }
 
+    /// Override the transfer-function metadata attached to this view.
     pub fn set_color_transfer(&mut self, ct: ColorTransfer) {
         self.img.ct = ct;
     }
 
+    /// Override the range metadata attached to this view.
     pub fn set_color_range(&mut self, range: ColorRange) {
         self.img.range = range;
     }
@@ -225,6 +265,7 @@ impl<'a> DecodedPackedView<'a> {
         self.img
     }
 
+    /// Copy the pixels into an owned buffer, respecting stride.
     pub fn to_owned(&self) -> Result<DecodedPacked> {
         let img: &sys::uhdr_raw_image = &*self.img;
         let data = copy_raw_packed(img)?;
@@ -241,15 +282,24 @@ impl<'a> DecodedPackedView<'a> {
     }
 }
 
+/// Parsed metadata describing an embedded gain map.
 #[derive(Debug, Clone)]
 pub struct GainMapMetadata {
+    /// Maximum per-channel gain applied by the gain map.
     pub max_content_boost: [f32; 3],
+    /// Minimum per-channel gain applied by the gain map.
     pub min_content_boost: [f32; 3],
+    /// Per-channel gamma used to map base image to HDR.
     pub gamma: [f32; 3],
+    /// Per-channel SDR offset.
     pub offset_sdr: [f32; 3],
+    /// Per-channel HDR offset.
     pub offset_hdr: [f32; 3],
+    /// Lower bound of the HDR capacity.
     pub hdr_capacity_min: f32,
+    /// Upper bound of the HDR capacity.
     pub hdr_capacity_max: f32,
+    /// Whether to reuse the base image color gamut for the gain map.
     pub use_base_cg: bool,
 }
 
@@ -273,6 +323,7 @@ impl GainMapMetadata {
     }
 }
 
+/// Borrowed descriptor over a caller-provided packed pixel buffer.
 pub struct RawImage<'a> {
     pub(crate) inner: sys::uhdr_raw_image,
     _marker: PhantomData<&'a mut [u8]>,
@@ -281,7 +332,7 @@ pub struct RawImage<'a> {
 impl<'a> RawImage<'a> {
     /// Create a packed descriptor for RGBA-like formats.
     pub fn packed(
-        fmt: sys::uhdr_img_fmt,
+        fmt: ImgFormat,
         width: u32,
         height: u32,
         data: &'a mut [u8],
@@ -339,29 +390,35 @@ impl<'a> RawImage<'a> {
 }
 
 impl<'a> RawImage<'a> {
+    /// Logical width in pixels.
     pub fn width(&self) -> u32 {
         self.inner.w
     }
 
+    /// Logical height in pixels.
     pub fn height(&self) -> u32 {
         self.inner.h
     }
 
+    /// Pixel layout.
     pub fn fmt(&self) -> ImgFormat {
         self.inner.fmt
     }
 
+    /// Color metadata.
     pub fn meta(&self) -> (ColorGamut, ColorTransfer, ColorRange) {
         (self.inner.cg, self.inner.ct, self.inner.range)
     }
 }
 
+/// Borrowed descriptor over a caller-provided compressed JPEG buffer.
 pub struct CompressedImage<'a> {
     pub(crate) inner: sys::uhdr_compressed_image,
     _marker: PhantomData<&'a mut [u8]>,
 }
 
 impl<'a> CompressedImage<'a> {
+    /// Wrap a mutable buffer containing JPEG bytes.
     pub fn from_bytes(
         data: &'a mut [u8],
         cg: ColorGamut,
@@ -438,6 +495,16 @@ pub(crate) fn copy_compressed_image(img: &sys::uhdr_compressed_image) -> Result<
     Ok(slice.to_vec())
 }
 
+/// Bytes-per-pixel helper for the supported packed formats.
+///
+/// ```
+/// use ultrahdr::{bytes_per_pixel, ImgFormat};
+///
+/// assert_eq!(
+///     bytes_per_pixel(ImgFormat::UHDR_IMG_FMT_32bppRGBA8888).unwrap(),
+///     4
+/// );
+/// ```
 pub fn bytes_per_pixel(fmt: ImgFormat) -> Result<usize> {
     match fmt {
         sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888 => Ok(4),
