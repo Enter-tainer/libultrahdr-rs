@@ -1,0 +1,44 @@
+name: Build ultrahdr-bake wasm
+description: Install deps, WASI SDK, and build ultrahdr-bake for wasm32-wasip1
+runs:
+  using: "composite"
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          ninja-build \
+          nasm \
+          pkg-config \
+          curl
+
+    - name: Install Rust toolchain (wasm32-wasip1)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-wasip1
+
+    - name: Cache cargo builds
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install WASI SDK
+      shell: bash
+      run: |
+        set -eo pipefail
+        TAG=29
+        VERSION=29.0
+        TAR="wasi-sdk-${VERSION}-x86_64-linux.tar.gz"
+        URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${TAG}/${TAR}"
+        curl -fL --retry 3 --continue-at - -o "$RUNNER_TEMP/wasi-sdk.tar.gz" "$URL"
+        tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$RUNNER_TEMP"
+        PREFIX="$RUNNER_TEMP/wasi-sdk-${VERSION}-x86_64-linux"
+        echo "WASI_SDK_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+        echo "WASI_SDK_TOOLCHAIN_FILE=$PREFIX/share/cmake/wasi-sdk-p1.cmake" >> "$GITHUB_ENV"
+
+    - name: Build ultrahdr-bake (wasm32-wasip1)
+      shell: bash
+      env:
+        WASI_SDK_PREFIX: ${{ env.WASI_SDK_PREFIX }}
+        WASI_SDK_TOOLCHAIN_FILE: ${{ env.WASI_SDK_TOOLCHAIN_FILE }}
+      run: cargo build -p ultrahdr-bake --release --locked --target wasm32-wasip1

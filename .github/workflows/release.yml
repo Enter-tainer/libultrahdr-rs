@@ -111,20 +111,25 @@ jobs:
         shell: bash
         run: |
           set -eo pipefail
-          ARTIFACT_DIR="artifacts/${{ matrix.target }}"
+          ARTIFACT_DIR="artifacts"
           mkdir -p "$ARTIFACT_DIR"
           case "${{ matrix.os }}" in
-            windows) BIN="target/${{ matrix.target }}/release/ultrahdr-bake.exe" ;;
-            *) BIN="target/${{ matrix.target }}/release/ultrahdr-bake" ;;
+            windows)
+              BIN="target/${{ matrix.target }}/release/ultrahdr-bake.exe"
+              OUT="ultrahdr-bake-${{ matrix.target }}.exe"
+              ;;
+            *)
+              BIN="target/${{ matrix.target }}/release/ultrahdr-bake"
+              OUT="ultrahdr-bake-${{ matrix.target }}"
+              ;;
           esac
-          cp "$BIN" "$ARTIFACT_DIR/"
-          if [ -f LICENSE ]; then cp LICENSE "$ARTIFACT_DIR/"; fi
+          cp "$BIN" "$ARTIFACT_DIR/$OUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ultrahdr-bake-${{ matrix.target }}
-          path: artifacts/${{ matrix.target }}
+          path: artifacts/ultrahdr-bake-${{ matrix.target }}*
 
   publish-crates-io:
     name: Publish to crates.io
@@ -161,10 +166,38 @@ jobs:
           sleep 5
           cargo publish -p ultrahdr-bake --locked
 
+  build-wasm:
+    name: Build wasm (wasm32-wasip1)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build wasm binary
+        uses: ./.github/actions/build-wasm
+
+      - name: Prepare wasm artifact
+        run: |
+          set -eo pipefail
+          ARTIFACT_DIR="artifacts"
+          mkdir -p "$ARTIFACT_DIR"
+          cp target/wasm32-wasip1/release/ultrahdr-bake.wasm "$ARTIFACT_DIR/ultrahdr-bake-wasm32-wasip1.wasm"
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultrahdr-bake-wasm32-wasip1
+          path: artifacts/ultrahdr-bake-wasm32-wasip1.wasm
+
   release:
     name: Create GitHub release
     needs:
       - build-binaries
+      - build-wasm
       - publish-crates-io
     runs-on: ubuntu-latest
     steps:
@@ -173,21 +206,10 @@ jobs:
         with:
           path: dist
           pattern: ultrahdr-bake-*
-          merge-multiple: false
-
-      - name: Package artifacts
-        run: |
-          set -eo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          for dir in dist/ultrahdr-bake-*; do
-            [ -d "$dir" ] || continue
-            target="${dir##*/ultrahdr-bake-}"
-            archive="dist/ultrahdr-bake-${TAG}-${target}.tar.gz"
-            tar -C "$dir" -czf "$archive" .
-          done
+          merge-multiple: true
 
       - name: Create release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: dist/*
           generate_release_notes: true
