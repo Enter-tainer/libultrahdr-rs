@@ -61,9 +61,12 @@ fn apply_patch_once(src_dir: &Path, patch_path: &Path) {
         .expect("patch path contains non-UTF8 characters");
 
     // If patch applies in reverse, assume already applied.
-    let reverse_ok = Command::new("git")
+    // NOTE: `git apply` doesn't work on crates.io source tarballs (no `.git`), so we use `patch`.
+    // `patch -R` may auto-detect and ignore `-R`, so we add `--force` to make the exit status reliable.
+    let reverse_ok = Command::new("patch")
         .current_dir(src_dir)
-        .args(["apply", "--reverse", "--check", patch_str])
+        .args(["-p1", "--dry-run", "--batch", "--silent", "--force", "-R"])
+        .args(["-i", patch_str])
         .output()
         .map(|out| out.status.success())
         .unwrap_or(false);
@@ -71,11 +74,26 @@ fn apply_patch_once(src_dir: &Path, patch_path: &Path) {
         return;
     }
 
-    let status = Command::new("git")
+    let dry_run = Command::new("patch")
         .current_dir(src_dir)
-        .args(["apply", "--whitespace=nowarn", patch_str])
+        .args(["-p1", "--dry-run", "--batch", "--silent", "--forward"])
+        .args(["-i", patch_str])
         .status()
-        .expect("failed to execute git apply");
+        .expect("failed to execute patch (is `patch` installed?)");
+    if !dry_run.success() {
+        panic!(
+            "failed to apply patch {} in {} (dry-run); set ULTRAHDR_SKIP_PATCHES=1 to bypass",
+            patch_path.display(),
+            src_dir.display()
+        );
+    }
+
+    let status = Command::new("patch")
+        .current_dir(src_dir)
+        .args(["-p1", "--batch", "--silent", "--forward"])
+        .args(["-i", patch_str])
+        .status()
+        .expect("failed to execute patch (is `patch` installed?)");
     if !status.success() {
         panic!(
             "failed to apply patch {} in {}",
