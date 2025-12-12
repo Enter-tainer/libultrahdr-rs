@@ -6,14 +6,14 @@ Rust bindings for Google's UltraHDR gain-map JPEG library with a small CLI. / �
 - `ultrahdr-sys`: raw FFI bindings to `libultrahdr` built via CMake. / `ultrahdr-sys`：通过 CMake 构建的 `libultrahdr` 原始 FFI 绑定。
 - `ultrahdr`: safe-ish wrapper around the FFI types plus helpers for gain map metadata, packed buffers, and error handling. / `ultrahdr`：封装 FFI，提供增益图元数据、打包缓冲区和错误处理辅助。
 - `ultrahdr-bake`: CLI that bakes an UltraHDR JPEG from an HDR (gain map) JPEG + SDR base JPEG, and can assemble Motion Photos (JPEG + MP4). / `ultrahdr-bake`：将 HDR（增益图）JPEG 与 SDR 基础 JPEG 合成为 UltraHDR JPEG，并可组装 Motion Photo（JPEG + MP4）。
-- Upstream sources live in the `libultrahdr` submodule (Apache-2.0). / 上游源码存放在 `libultrahdr` 子模块（Apache-2.0）。
+- Upstream sources live in the `ultrahdr-sys/libultrahdr` submodule (Apache-2.0). / 上游源码存放在 `ultrahdr-sys/libultrahdr` 子模块（Apache-2.0）。
 - `ultrahdr-browser`: Vite/React demo that runs `ultrahdr-bake` via WASI in the browser; / `ultrahdr-browser`：基于 Vite/React 的浏览器演示，通过 WASI 运行 `ultrahdr-bake`
 
 ## Repository layout / 目录结构
 - `ultrahdr-sys/`: build script, bindgen output, and generated `sys` APIs. / `ultrahdr-sys/`：构建脚本、bindgen 输出与底层 `sys` 接口。
 - `ultrahdr/`: ergonomic wrapper plus `examples/ultrahdr_app.rs` sample. / `ultrahdr/`：易用封装与示例 `examples/ultrahdr_app.rs`。
 - `ultrahdr-bake/`: end-user CLI for baking UltraHDR JPEGs and assembling Motion Photos. / `ultrahdr-bake/`：面向用户的 UltraHDR 生成命令行，并可组装 Motion Photo。
-- `libultrahdr/`: upstream C/C++ sources pulled as a git submodule. / `libultrahdr/`：上游 C/C++ 源码子模块。
+- `ultrahdr-sys/libultrahdr/`: upstream C/C++ sources pulled as a git submodule. / `ultrahdr-sys/libultrahdr/`：上游 C/C++ 源码子模块。
 
 ## Prerequisites / 前置依赖
 - Initialize submodules: `git submodule update --init --recursive`. / 初始化子模块：`git submodule update --init --recursive`。

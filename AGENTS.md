@@ -1,12 +1,12 @@
 # Agent notes
 
-What this repo is: Rust bindings for Google's `libultrahdr` gain-map JPEG library plus a small CLI (`ultrahdr-bake`). The upstream C/C++ sources live in the `libultrahdr` submodule.
+What this repo is: Rust bindings for Google's `libultrahdr` gain-map JPEG library plus a small CLI (`ultrahdr-bake`). The upstream C/C++ sources live in the `ultrahdr-sys/libultrahdr` submodule.
 
 ## Layout
 - `ultrahdr-sys/`: build.rs drives CMake; bindgen output is included via `OUT_DIR`. Features: `vendored` (default, builds libjpeg-turbo etc.), `shared`, `gles`, `iso21496` (default).
 - `ultrahdr/`: safer wrapper types (`Encoder`, `Decoder`, `RawImage`, `CompressedImage`, `GainMapMetadata`, etc.) and `examples/ultrahdr_app.rs` showcasing encode/decode.
 - `ultrahdr-bake/`: end-user CLI that fuses an HDR gain-map JPEG + SDR JPEG into an UltraHDR JPEG. Entrypoints in `src/main.rs`, CLI args in `src/cli.rs`, detection logic in `src/detect.rs`, encoding in `src/encode.rs`.
-- `libultrahdr/`: git submodule for upstream sources; can be overridden with `ULTRAHDR_SRC_DIR`.
+- `ultrahdr-sys/libultrahdr/`: git submodule for upstream sources; can be overridden with `ULTRAHDR_SRC_DIR`.
 
 ## Build & test
 - Ensure submodules are present: `git submodule update --init --recursive`.

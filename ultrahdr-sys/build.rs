@@ -30,6 +30,11 @@ fn locate_src_dir(manifest_dir: &Path) -> PathBuf {
         return PathBuf::from(env);
     }
 
+    let submodule_path = manifest_dir.join("libultrahdr");
+    if submodule_path.join("CMakeLists.txt").is_file() {
+        return submodule_path;
+    }
+
     let workspace_root = manifest_dir
         .parent()
         .expect("ultrahdr-sys has no parent dir");
@@ -84,12 +89,9 @@ fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
     if env::var("ULTRAHDR_SKIP_PATCHES").is_ok() {
         return;
     }
-    let workspace_root = manifest_dir
-        .parent()
-        .expect("ultrahdr-sys has no parent dir");
     apply_patch_once(
         src_dir,
-        &workspace_root.join("patches/libultrahdr-no-threads.patch"),
+        &manifest_dir.join("patches/libultrahdr-no-threads.patch"),
     );
 }
 
@@ -103,10 +105,7 @@ fn main() {
         );
     }
 
-    let patch_path = manifest_dir
-        .parent()
-        .expect("ultrahdr-sys has no parent dir")
-        .join("patches/libultrahdr-no-threads.patch");
+    let patch_path = manifest_dir.join("patches/libultrahdr-no-threads.patch");
     apply_local_patches(&manifest_dir, &src_dir);
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SKIP_PATCHES");
