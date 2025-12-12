@@ -21,7 +21,7 @@ no-threads = ["ultrahdr/no-threads"]
 jpeg-max-dimension = ["ultrahdr/jpeg-max-dimension"]
 
 [dependencies]
-ultrahdr = { path = "../ultrahdr" }
+ultrahdr = { workspace = true }
 anyhow.workspace = true
 clap.workspace = true
 memchr.workspace = true

@@ -20,7 +20,7 @@ no-threads = ["ultrahdr-sys/no-threads"]
 jpeg-max-dimension = ["ultrahdr-sys/jpeg-max-dimension"]
 
 [dependencies]
-ultrahdr-sys = { path = "../ultrahdr-sys" }
+ultrahdr-sys = { workspace = true }
 
 [dev-dependencies]
 anyhow.workspace = true
