@@ -155,8 +155,11 @@ jobs:
           set -eo pipefail
           cargo publish -p ultrahdr-sys --locked
           # Give the index a moment to pick up ultrahdr-sys before publishing dependents.
-          sleep 15
+          sleep 5
           cargo publish -p ultrahdr --locked
+          # Publish CLI after library crates land.
+          sleep 5
+          cargo publish -p ultrahdr-bake --locked
 
   release:
     name: Create GitHub release

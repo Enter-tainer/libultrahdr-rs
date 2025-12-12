@@ -9,7 +9,11 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Bake HDR intent + SDR base into an UltraHDR JPEG (CLI)"
-publish = false
+exclude = [
+  "/target",
+  "/CMakeFiles",
+  "/artifacts",
+]
 
 [features]
 default = ["vendored", "iso21496", "jpeg-max-dimension"]
