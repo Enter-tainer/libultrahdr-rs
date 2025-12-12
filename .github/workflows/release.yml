@@ -1,23 +1,19 @@
-name: CI
+name: Release
 
 on:
   push:
-    branches:
-      - main
-      - master
     tags:
       - "v*"
-  pull_request:
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint-and-test:
+  checks:
     name: Format, Clippy, Tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -55,8 +51,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-features --locked
 
-  release-binaries:
+  build-binaries:
     name: Build release binaries (${{ matrix.target }})
+    needs: checks
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -129,33 +126,65 @@ jobs:
           name: ultrahdr-bake-${{ matrix.target }}
           path: artifacts/${{ matrix.target }}
 
-  frontend:
-    name: Frontend format & typecheck
+  publish-crates-io:
+    name: Publish to crates.io
+    needs: checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
         with:
-          version: 10
+          submodules: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate with crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -eo pipefail
+          cargo publish -p ultrahdr-sys --locked
+          # Give the index a moment to pick up ultrahdr-sys before publishing dependents.
+          sleep 15
+          cargo publish -p ultrahdr --locked
+
+  release:
+    name: Create GitHub release
+    needs:
+      - build-binaries
+      - publish-crates-io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: 24
-          cache: "pnpm"
-          cache-dependency-path: ultrahdr-browser/pnpm-lock.yaml
+          path: dist
+          pattern: ultrahdr-bake-*
+          merge-multiple: false
 
-      - name: Install dependencies
-        working-directory: ultrahdr-browser
-        run: pnpm install --frozen-lockfile
+      - name: Package artifacts
+        run: |
+          set -eo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          for dir in dist/ultrahdr-bake-*; do
+            [ -d "$dir" ] || continue
+            target="${dir##*/ultrahdr-bake-}"
+            archive="dist/ultrahdr-bake-${TAG}-${target}.tar.gz"
+            tar -C "$dir" -czf "$archive" .
+          done
 
-      - name: Format check
-        working-directory: ultrahdr-browser
-        run: pnpm run format
-
-      - name: Type check
-        working-directory: ultrahdr-browser
-        run: pnpm run typecheck
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
