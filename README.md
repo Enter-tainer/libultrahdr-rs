@@ -1,5 +1,10 @@
 # libultrahdr-rs
 
+[![ultrahdr crates.io](https://img.shields.io/crates/v/ultrahdr.svg?label=ultrahdr)](https://crates.io/crates/ultrahdr)
+[![ultrahdr-sys crates.io](https://img.shields.io/crates/v/ultrahdr-sys.svg?label=ultrahdr-sys)](https://crates.io/crates/ultrahdr-sys)
+[![ultrahdr docs.rs](https://docs.rs/ultrahdr/badge.svg)](https://docs.rs/ultrahdr)
+[![ultrahdr-sys docs.rs](https://docs.rs/ultrahdr-sys/badge.svg)](https://docs.rs/ultrahdr-sys)
+
 Rust bindings for Google's UltraHDR gain-map JPEG library with a small CLI. / 基于 Google libultrahdr 的 Rust 绑定与命令行工具。
 
 ## Overview / 概览
