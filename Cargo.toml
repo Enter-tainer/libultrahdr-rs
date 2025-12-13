@@ -3,7 +3,7 @@ members = ["ultrahdr-sys", "ultrahdr", "ultrahdr-bake"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "Apache-2.0"
 readme = "README.md"
@@ -22,5 +22,5 @@ cmake = "0.1"
 img-parts = "0.4"
 memchr = "2"
 quick-xml = "0.38.4"
-ultrahdr-sys = { version = "0.1.2", path = "ultrahdr-sys" }
-ultrahdr = { version = "0.1.2", path = "ultrahdr" }
+ultrahdr-sys = { version = "0.1.3", path = "ultrahdr-sys" }
+ultrahdr = { version = "0.1.3", path = "ultrahdr" }
