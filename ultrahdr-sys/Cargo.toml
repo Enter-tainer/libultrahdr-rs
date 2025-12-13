@@ -39,7 +39,3 @@ jpeg-max-dimension = []
 [build-dependencies]
 bindgen.workspace = true
 cmake.workspace = true
-
-[package.metadata.docs.rs]
-features = ["vendored", "iso21496"]
-default-target = "x86_64-unknown-linux-gnu"

@@ -160,6 +160,28 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let source_dir = locate_src_dir(&manifest_dir);
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+
+    // docs.rs builds in a sandboxed environment without network access.
+    // Skip the full CMake build and only generate bindings for documentation.
+    if env::var("DOCS_RS").is_ok() {
+        println!("cargo:warning=Building for docs.rs: skipping CMake build");
+        let bindings = bindgen::Builder::default()
+            .header(source_dir.join("ultrahdr_api.h").to_string_lossy())
+            .clang_arg(format!("-I{}", source_dir.display()))
+            .rustified_enum("uhdr_.*")
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+            .layout_tests(false)
+            .allowlist_function("uhdr_.*")
+            .allowlist_type("uhdr_.*")
+            .allowlist_var("UHDR_.*")
+            .generate()
+            .expect("bindgen failed");
+        bindings
+            .write_to_file(out_dir.join("bindings.rs"))
+            .expect("failed to write bindings");
+        return;
+    }
+
     if !source_dir.join("CMakeLists.txt").is_file() {
         panic!(
             "Could not find libultrahdr sources; set ULTRAHDR_SRC_DIR (current: {})",
