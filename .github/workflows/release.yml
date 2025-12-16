@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -131,6 +132,11 @@ jobs:
           name: ultrahdr-bake-${{ matrix.target }}
           path: artifacts/ultrahdr-bake-${{ matrix.target }}*
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: artifacts/ultrahdr-bake-${{ matrix.target }}*
+
   publish-crates-io:
     name: Publish to crates.io
     needs: checks
@@ -192,6 +198,11 @@ jobs:
         with:
           name: ultrahdr-bake-wasm32-wasip1
           path: artifacts/ultrahdr-bake-wasm32-wasip1.wasm
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: artifacts/ultrahdr-bake-wasm32-wasip1.wasm
 
   release:
     name: Create GitHub release
