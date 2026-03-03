@@ -36,6 +36,8 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
     // Step 1: Find MPF APP2 segment to locate secondary image.
     let mut secondary_offset: Option<u32> = None;
     let mut secondary_size: Option<u32> = None;
+    // Absolute file position of the MPF TIFF header (for offset rebasing).
+    let mut mpf_tiff_header_offset: usize = 0;
 
     for seg in &segments.segments {
         // APP2 marker = 0xE2
@@ -43,6 +45,10 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
             // Parse MPF structure to find secondary image entry.
             // MPF structure after signature: endian(4) + IFD offset(4) + tag count(2) + tags...
             let mpf_data = &seg.data[4..]; // skip "MPF\0"
+            // seg.offset is the file position of the FF E2 marker.
+            // seg.data starts 4 bytes later (after FF E2 LL LL).
+            // MPF\0 is 4 more bytes. TIFF header = seg.offset + 4 + 4.
+            mpf_tiff_header_offset = seg.offset + 4 + 4;
             if mpf_data.len() < 8 {
                 continue;
             }
@@ -104,8 +110,8 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
                             mpf_data[e2_start + 11],
                         ]);
                         secondary_size = Some(size);
-                        // If offset is 0, it means the secondary image starts right after the primary.
-                        // Otherwise the offset is relative to the start of the primary image.
+                        // MPF offsets for non-first entries are relative to the
+                        // TIFF header inside the MPF APP2 segment.
                         secondary_offset = Some(offset);
                     }
                 }
@@ -114,21 +120,37 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
     }
 
     // No MPF segment found — this is not an UltraHDR JPEG.
-    let (sec_offset, sec_size) = match (secondary_offset, secondary_size) {
+    let (sec_rel_offset, sec_size) = match (secondary_offset, secondary_size) {
         (Some(o), Some(s)) => (o as usize, s as usize),
         _ => return Ok(None),
     };
 
     // Step 2: Extract the secondary (gain map) JPEG bytes.
+    // Per the MPF spec, offsets for non-first entries are relative to the
+    // TIFF header inside the MPF APP2 segment. Some encoders (including our
+    // own before this fix) use absolute file offsets instead. Try the
+    // spec-compliant interpretation first, then fall back to absolute.
+    let sec_offset = if sec_rel_offset == 0 {
+        0usize
+    } else {
+        let spec_offset = mpf_tiff_header_offset + sec_rel_offset;
+        if spec_offset + sec_size <= data.len()
+            && data.get(spec_offset..spec_offset + 2) == Some(&[0xFF, 0xD8])
+        {
+            spec_offset
+        } else if sec_rel_offset + sec_size <= data.len()
+            && data.get(sec_rel_offset..sec_rel_offset + 2) == Some(&[0xFF, 0xD8])
+        {
+            // Fallback: treat as absolute file offset
+            sec_rel_offset
+        } else {
+            0
+        }
+    };
     if sec_offset == 0 || sec_offset + sec_size > data.len() {
         return Ok(None);
     }
     let gainmap_jpeg = data[sec_offset..sec_offset + sec_size].to_vec();
-
-    // Verify it looks like a JPEG.
-    if gainmap_jpeg.len() < 2 || gainmap_jpeg[0] != 0xFF || gainmap_jpeg[1] != 0xD8 {
-        return Ok(None);
-    }
 
     // Step 3: Find gain map metadata.
     // Look for ISO 21496-1 binary metadata in APP2 segments of the gain map JPEG,

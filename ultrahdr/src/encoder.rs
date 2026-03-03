@@ -346,9 +346,13 @@ pub fn assemble_ultrahdr(
         }
     }
 
-    // Now fix up the MPF data with correct offsets
+    // Now fix up the MPF data with correct offsets.
+    // Per MPF spec, secondary image offset is relative to the MPF TIFF header.
+    // mpf_data_start points to the start of MPF payload (including "MPF\0" sig).
+    // TIFF header starts 4 bytes into the MPF data (after "MPF\0").
     let primary_size = out.len() as u32;
-    let secondary_offset = primary_size;
+    let mpf_tiff_header_pos = (mpf_data_start + 4) as u32;
+    let secondary_offset = primary_size - mpf_tiff_header_pos;
 
     let mpf = generate_mpf(primary_size, 0, gainmap_jpeg.len() as u32, secondary_offset);
     out[mpf_data_start..mpf_data_start + mpf_data_size].copy_from_slice(&mpf);
