@@ -78,12 +78,10 @@ fn rust_decode_to_rgba8888(ultrahdr_jpeg: &[u8]) -> Vec<u8> {
 /// and produce output close to what the C++ decoder produced.
 #[test]
 fn test_decode_sys_encoded_jpeg() {
-    let sys_ultrahdr =
-        std::fs::read(test_data_dir().join("minnie_ultrahdr_sys.jpg"))
-            .expect("failed to read golden UltraHDR JPEG");
-    let sys_decoded =
-        std::fs::read(test_data_dir().join("minnie_decoded_sys_rgba8888.bin"))
-            .expect("failed to read golden decoded pixels");
+    let sys_ultrahdr = std::fs::read(test_data_dir().join("minnie_ultrahdr_sys.jpg"))
+        .expect("failed to read golden UltraHDR JPEG");
+    let sys_decoded = std::fs::read(test_data_dir().join("minnie_decoded_sys_rgba8888.bin"))
+        .expect("failed to read golden decoded pixels");
     assert_eq!(sys_decoded.len(), (WIDTH * HEIGHT * 4) as usize);
 
     let rust_decoded = rust_decode_to_rgba8888(&sys_ultrahdr);
@@ -113,9 +111,8 @@ fn test_decode_sys_encoded_jpeg() {
 #[test]
 fn test_roundtrip_pixel_tolerance() {
     let hdr_rgba = load_minnie_rgba();
-    let sdr_jpeg =
-        std::fs::read(test_data_dir().join("minnie-320x240-rgb.jpg"))
-            .expect("failed to read SDR JPEG");
+    let sdr_jpeg = std::fs::read(test_data_dir().join("minnie-320x240-rgb.jpg"))
+        .expect("failed to read SDR JPEG");
 
     let ultrahdr_jpeg = Encoder::new()
         .hdr_raw(
@@ -151,9 +148,8 @@ fn test_roundtrip_pixel_tolerance() {
 #[test]
 fn test_metadata_preservation() {
     let hdr_rgba = load_minnie_rgba();
-    let sdr_jpeg =
-        std::fs::read(test_data_dir().join("minnie-320x240-rgb.jpg"))
-            .expect("failed to read SDR JPEG");
+    let sdr_jpeg = std::fs::read(test_data_dir().join("minnie-320x240-rgb.jpg"))
+        .expect("failed to read SDR JPEG");
 
     let ultrahdr_jpeg = Encoder::new()
         .hdr_raw(
@@ -215,9 +211,8 @@ fn test_metadata_preservation() {
 /// Test that Rust decoder can probe the C++-encoded UltraHDR JPEG for metadata.
 #[test]
 fn test_probe_sys_encoded() {
-    let sys_ultrahdr =
-        std::fs::read(test_data_dir().join("minnie_ultrahdr_sys.jpg"))
-            .expect("failed to read golden UltraHDR JPEG");
+    let sys_ultrahdr = std::fs::read(test_data_dir().join("minnie_ultrahdr_sys.jpg"))
+        .expect("failed to read golden UltraHDR JPEG");
 
     let metadata = Decoder::new(&sys_ultrahdr)
         .probe()
