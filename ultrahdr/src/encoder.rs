@@ -3,10 +3,11 @@
 use crate::color::gamut::luminance;
 use crate::color::transfer::{
     hlg_inv_oetf, hlg_inv_ootf_approx, pq_inv_oetf, reference_display_peak_nits, srgb_inv_oetf,
+    srgb_oetf,
 };
 use crate::color::Color;
 use crate::error::{Error, Result};
-use crate::gainmap::math::compute_gain;
+use crate::gainmap::math::{compute_gain, global_tonemap};
 use crate::gainmap::metadata::{
     encode_gainmap_metadata, write_xmp_gainmap_metadata, GainMapMetadataFrac,
 };
@@ -586,15 +587,14 @@ impl Encoder {
     }
 
     /// Encode the UltraHDR JPEG.
+    ///
+    /// If no SDR JPEG is provided, automatically generates an SDR image from the
+    /// HDR input using global Reinhard tone mapping (API-0 scenario).
     pub fn encode(self) -> Result<Vec<u8>> {
         let hdr_pixels = self
             .hdr_pixels
             .as_ref()
             .ok_or_else(|| Error::InvalidParam("HDR input not set".into()))?;
-        let sdr_jpeg = self
-            .sdr_jpeg
-            .as_ref()
-            .ok_or_else(|| Error::InvalidParam("SDR JPEG input not set".into()))?;
 
         // Decode HDR to linear RGB
         let hdr_linear = decode_pixels_to_linear(
@@ -606,27 +606,54 @@ impl Encoder {
             self.hdr_gamut,
         )?;
 
-        // Decode SDR JPEG
-        let sdr_decoded = crate::jpeg::decode::decode_jpeg(sdr_jpeg)?;
-        if sdr_decoded.width != self.hdr_width || sdr_decoded.height != self.hdr_height {
-            return Err(Error::InvalidParam(format!(
-                "SDR dimensions {}x{} don't match HDR {}x{}",
-                sdr_decoded.width, sdr_decoded.height, self.hdr_width, self.hdr_height,
-            )));
-        }
+        let w = self.hdr_width as usize;
+        let h = self.hdr_height as usize;
 
-        // Convert SDR pixels to linear (SDR is always sRGB gamma)
-        let sdr_linear = {
-            let w = sdr_decoded.width as usize;
-            let h = sdr_decoded.height as usize;
-            let mut lin = vec![0.0f32; w * h * 3];
+        // Resolve SDR: use provided JPEG, or auto-tonemap from HDR
+        let (sdr_jpeg_data, sdr_linear) = if let Some(sdr_jpeg) = &self.sdr_jpeg {
+            let sdr_decoded = crate::jpeg::decode::decode_jpeg(sdr_jpeg)?;
+            if sdr_decoded.width != self.hdr_width || sdr_decoded.height != self.hdr_height {
+                return Err(Error::InvalidParam(format!(
+                    "SDR dimensions {}x{} don't match HDR {}x{}",
+                    sdr_decoded.width, sdr_decoded.height, self.hdr_width, self.hdr_height,
+                )));
+            }
+            let lin = {
+                let mut lin = vec![0.0f32; w * h * 3];
+                for i in 0..(w * h) {
+                    let base = i * 3;
+                    lin[base] = srgb_inv_oetf(sdr_decoded.pixels[base] as f32 / 255.0);
+                    lin[base + 1] = srgb_inv_oetf(sdr_decoded.pixels[base + 1] as f32 / 255.0);
+                    lin[base + 2] = srgb_inv_oetf(sdr_decoded.pixels[base + 2] as f32 / 255.0);
+                }
+                lin
+            };
+            let icc = sdr_decoded.icc_profile;
+            (AutoSdr::Provided(sdr_jpeg.clone(), icc), lin)
+        } else {
+            // Auto tone-map HDR → SDR
+            let headroom = self.target_display_peak_nits / SDR_WHITE_NITS;
+            let mut sdr_rgb = vec![0u8; w * h * 3];
+            let mut sdr_lin = vec![0.0f32; w * h * 3];
             for i in 0..(w * h) {
                 let base = i * 3;
-                lin[base] = srgb_inv_oetf(sdr_decoded.pixels[base] as f32 / 255.0);
-                lin[base + 1] = srgb_inv_oetf(sdr_decoded.pixels[base + 1] as f32 / 255.0);
-                lin[base + 2] = srgb_inv_oetf(sdr_decoded.pixels[base + 2] as f32 / 255.0);
+                let rgb = [hdr_linear[base], hdr_linear[base + 1], hdr_linear[base + 2]];
+                let (tm_rgb, _, _) = global_tonemap(rgb, headroom, false);
+                sdr_lin[base] = tm_rgb[0];
+                sdr_lin[base + 1] = tm_rgb[1];
+                sdr_lin[base + 2] = tm_rgb[2];
+                // Encode to sRGB gamma for JPEG
+                sdr_rgb[base] = (srgb_oetf(tm_rgb[0].clamp(0.0, 1.0)) * 255.0 + 0.5) as u8;
+                sdr_rgb[base + 1] = (srgb_oetf(tm_rgb[1].clamp(0.0, 1.0)) * 255.0 + 0.5) as u8;
+                sdr_rgb[base + 2] = (srgb_oetf(tm_rgb[2].clamp(0.0, 1.0)) * 255.0 + 0.5) as u8;
             }
-            lin
+            let jpeg = crate::jpeg::encode::encode_rgb_to_jpeg(
+                &sdr_rgb,
+                self.hdr_width,
+                self.hdr_height,
+                self.quality,
+            )?;
+            (AutoSdr::Generated(jpeg), sdr_lin)
         };
 
         // Generate gain map
@@ -661,12 +688,21 @@ impl Encoder {
             )?
         };
 
-        // Get ICC profile from SDR JPEG if available
-        let icc = sdr_decoded.icc_profile.as_deref();
+        // Get ICC profile and SDR JPEG bytes
+        let (sdr_jpeg_bytes, icc) = match &sdr_jpeg_data {
+            AutoSdr::Provided(jpeg, icc_opt) => (jpeg.as_slice(), icc_opt.as_deref()),
+            AutoSdr::Generated(jpeg) => (jpeg.as_slice(), None),
+        };
 
         // Assemble the UltraHDR JPEG
-        assemble_ultrahdr(sdr_jpeg, &gainmap_jpeg, &metadata, None, icc)
+        assemble_ultrahdr(sdr_jpeg_bytes, &gainmap_jpeg, &metadata, None, icc)
     }
+}
+
+/// Internal helper to track SDR JPEG source.
+enum AutoSdr {
+    Provided(Vec<u8>, Option<Vec<u8>>),
+    Generated(Vec<u8>),
 }
 
 #[cfg(test)]
@@ -901,8 +937,8 @@ mod tests {
     }
 
     #[test]
-    fn encoder_missing_sdr_input() {
-        let hdr_pixels = vec![0u8; 4 * 4 * 4];
+    fn encoder_auto_tonemap_when_no_sdr() {
+        let hdr_pixels = vec![128u8; 4 * 4 * 4];
         let result = Encoder::new()
             .hdr_raw(
                 &hdr_pixels,
@@ -913,6 +949,8 @@ mod tests {
                 ColorTransfer::Srgb,
             )
             .encode();
-        assert!(result.is_err());
+        assert!(result.is_ok(), "auto tonemap should succeed: {:?}", result.err());
+        let out = result.unwrap();
+        assert_eq!(&out[..2], &[0xFF, 0xD8]);
     }
 }

@@ -3,6 +3,48 @@ use ultrahdr::encoder::Encoder;
 use ultrahdr::types::*;
 
 #[test]
+fn encode_hdr_only_auto_tonemap() {
+    let width: usize = 64;
+    let height: usize = 64;
+    let hdr_pixels: Vec<u8> = (0..width * height * 4)
+        .map(|i| ((i * 7 + 13) % 256) as u8)
+        .collect();
+
+    // Only provide HDR, no SDR — should auto tone-map
+    let ultrahdr_jpeg = Encoder::new()
+        .hdr_raw(
+            &hdr_pixels,
+            width as u32,
+            height as u32,
+            PixelFormat::Rgba8888,
+            ColorGamut::Bt709,
+            ColorTransfer::Srgb,
+        )
+        .quality(90)
+        .encode()
+        .expect("HDR-only encode with auto tonemap should succeed");
+
+    // Should be a valid JPEG
+    assert_eq!(&ultrahdr_jpeg[..2], &[0xFF, 0xD8], "should start with SOI");
+    assert_eq!(
+        &ultrahdr_jpeg[ultrahdr_jpeg.len() - 2..],
+        &[0xFF, 0xD9],
+        "should end with EOI"
+    );
+
+    // Should be decodable
+    let decoded = Decoder::new(&ultrahdr_jpeg)
+        .output_format(PixelFormat::Rgba8888)
+        .output_transfer(ColorTransfer::Srgb)
+        .max_display_boost(4.0)
+        .decode()
+        .expect("decode should succeed");
+
+    assert_eq!(decoded.width, width as u32);
+    assert_eq!(decoded.height, height as u32);
+}
+
+#[test]
 fn encode_then_decode_rgba8888_sdr() {
     let width: usize = 64;
     let height: usize = 64;
