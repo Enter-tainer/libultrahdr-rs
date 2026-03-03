@@ -15,21 +15,26 @@ use crate::jpeg::parse_jpeg_segments;
 use crate::mpf::{calculate_mpf_size, generate_mpf};
 use crate::types::{ColorGamut, ColorTransfer, GainMapMetadata, PixelFormat, SDR_WHITE_NITS};
 
-/// Generate a gain map image from SDR and HDR linear-light pixel buffers.
+/// Generate a gain map image from SDR and HDR gamma-space pixel buffers.
 ///
-/// Both inputs must be in linear light, RGB (3 floats per pixel).
+/// Both inputs must be in their native gamma (OETF) space, RGB (3 floats per pixel).
+/// SDR is expected in sRGB gamma 0-1; HDR in its native transfer function encoding.
+/// Pixels are averaged in gamma space (matching C++ libultrahdr), then linearized
+/// per-block before gain computation.
+///
 /// Returns a grayscale (or 3-channel if `multichannel`) gain map as u8 pixels,
 /// plus the associated `GainMapMetadata`.
 ///
 /// Port of `JpegR::generateGainMap()` from libultrahdr.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_gainmap(
-    sdr_linear: &[f32],
-    hdr_linear: &[f32],
+    sdr_gamma: &[f32],
+    hdr_gamma: &[f32],
     width: u32,
     height: u32,
     sdr_gamut: ColorGamut,
     hdr_gamut: ColorGamut,
+    hdr_transfer: ColorTransfer,
     scale: u32,
     multichannel: bool,
     target_peak_nits: f32,
@@ -38,11 +43,11 @@ pub fn generate_gainmap(
     let w = width as usize;
     let h = height as usize;
     let expected = w * h * 3;
-    if sdr_linear.len() < expected || hdr_linear.len() < expected {
+    if sdr_gamma.len() < expected || hdr_gamma.len() < expected {
         return Err(Error::InvalidParam(format!(
             "pixel buffer too small: need {expected}, got sdr={}, hdr={}",
-            sdr_linear.len(),
-            hdr_linear.len(),
+            sdr_gamma.len(),
+            hdr_gamma.len(),
         )));
     }
     if scale == 0 {
@@ -56,6 +61,13 @@ pub fn generate_gainmap(
 
     // Whether we need gamut conversion for HDR pixels (C++ converts HDR to SDR gamut).
     let need_gamut_convert = sdr_gamut != hdr_gamut;
+
+    // C++ uses hdr_white_nits for HDR nits scaling (1000 for HLG, 10000 for PQ).
+    // For Linear/Srgb, we use SDR_WHITE_NITS since there's no separate peak.
+    let hdr_nits_factor = match hdr_transfer {
+        ColorTransfer::Linear => SDR_WHITE_NITS,
+        _ => reference_display_peak_nits(hdr_transfer),
+    };
 
     // First pass: find min/max gain across the image.
     let mut min_gain_log2 = f32::MAX;
@@ -82,22 +94,49 @@ pub fn generate_gainmap(
             for sy in y_start..y_end {
                 for sx in x_start..x_end {
                     let idx = (sy * w + sx) * 3;
-                    sdr_r += sdr_linear[idx];
-                    sdr_g += sdr_linear[idx + 1];
-                    sdr_b += sdr_linear[idx + 2];
-                    hdr_r += hdr_linear[idx];
-                    hdr_g += hdr_linear[idx + 1];
-                    hdr_b += hdr_linear[idx + 2];
+                    sdr_r += sdr_gamma[idx];
+                    sdr_g += sdr_gamma[idx + 1];
+                    sdr_b += sdr_gamma[idx + 2];
+                    hdr_r += hdr_gamma[idx];
+                    hdr_g += hdr_gamma[idx + 1];
+                    hdr_b += hdr_gamma[idx + 2];
                     count += 1;
                 }
             }
             let inv = 1.0 / count as f32;
-            let mut sdr_r = sdr_r * inv;
-            let mut sdr_g = sdr_g * inv;
-            let mut sdr_b = sdr_b * inv;
-            let mut hdr_r = hdr_r * inv;
-            let mut hdr_g = hdr_g * inv;
-            let mut hdr_b = hdr_b * inv;
+            // Average is in gamma space (matching C++ samplePixels).
+            let sdr_r_avg = sdr_r * inv;
+            let sdr_g_avg = sdr_g * inv;
+            let sdr_b_avg = sdr_b * inv;
+            let hdr_r_avg = hdr_r * inv;
+            let hdr_g_avg = hdr_g * inv;
+            let hdr_b_avg = hdr_b * inv;
+
+            // Linearize SDR (always sRGB).
+            let mut sdr_r = srgb_inv_oetf(sdr_r_avg);
+            let mut sdr_g = srgb_inv_oetf(sdr_g_avg);
+            let mut sdr_b = srgb_inv_oetf(sdr_b_avg);
+
+            // Linearize HDR based on transfer function.
+            let (mut hdr_r, mut hdr_g, mut hdr_b) = match hdr_transfer {
+                ColorTransfer::Hlg => {
+                    let r = hlg_inv_oetf(hdr_r_avg);
+                    let g = hlg_inv_oetf(hdr_g_avg);
+                    let b = hlg_inv_oetf(hdr_b_avg);
+                    let [r, g, b] = hlg_ootf_approx(r, g, b);
+                    (r, g, b)
+                }
+                ColorTransfer::Pq => (
+                    pq_inv_oetf(hdr_r_avg),
+                    pq_inv_oetf(hdr_g_avg),
+                    pq_inv_oetf(hdr_b_avg),
+                ),
+                ColorTransfer::Linear | ColorTransfer::Srgb => (
+                    srgb_inv_oetf(hdr_r_avg),
+                    srgb_inv_oetf(hdr_g_avg),
+                    srgb_inv_oetf(hdr_b_avg),
+                ),
+            };
 
             // Gamut conversion: convert HDR to SDR gamut (C++ does this).
             if need_gamut_convert {
@@ -124,7 +163,7 @@ pub fn generate_gainmap(
                     let sdr_ch = [sdr_r, sdr_g, sdr_b][ch];
                     let hdr_ch = [hdr_r, hdr_g, hdr_b][ch];
                     let sdr_ch_nits = sdr_ch * SDR_WHITE_NITS;
-                    let hdr_ch_nits = hdr_ch * SDR_WHITE_NITS;
+                    let hdr_ch_nits = hdr_ch * hdr_nits_factor;
                     let gain = compute_gain(sdr_ch_nits, hdr_ch_nits);
                     gain_values[map_idx * 3 + ch] = gain;
                     min_gain_log2 = min_gain_log2.min(gain);
@@ -135,7 +174,7 @@ pub fn generate_gainmap(
                 let sdr_y = sdr_r.max(sdr_g).max(sdr_b);
                 let hdr_y = hdr_r.max(hdr_g).max(hdr_b);
                 let sdr_y_nits = sdr_y * SDR_WHITE_NITS;
-                let hdr_y_nits = hdr_y * SDR_WHITE_NITS;
+                let hdr_y_nits = hdr_y * hdr_nits_factor;
                 let gain = compute_gain(sdr_y_nits, hdr_y_nits);
                 gain_values[map_idx] = gain;
                 min_gain_log2 = min_gain_log2.min(gain);
@@ -428,6 +467,7 @@ pub fn assemble_ultrahdr(
 }
 
 /// Decode raw pixel data from various formats to linear RGB f32.
+#[allow(dead_code)]
 fn decode_pixels_to_linear(
     pixels: &[u8],
     width: u32,
@@ -507,6 +547,112 @@ fn decode_pixels_to_linear(
         linear[out_idx] = r_lin;
         linear[out_idx + 1] = g_lin;
         linear[out_idx + 2] = b_lin;
+    }
+
+    Ok(linear)
+}
+
+/// Decode raw pixel data to normalized 0-1 range WITHOUT applying transfer functions.
+///
+/// This performs only pixel format unpacking (byte/10-bit/f16 → f32 in [0,1]).
+/// The result is in the native gamma (OETF) space of the input.
+fn decode_pixels_to_normalized(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+) -> Result<Vec<f32>> {
+    let w = width as usize;
+    let h = height as usize;
+    let bpp = format.bytes_per_pixel();
+    let expected = w * h * bpp;
+    if pixels.len() < expected {
+        return Err(Error::InvalidParam(format!(
+            "pixel buffer too small: need {expected}, got {}",
+            pixels.len(),
+        )));
+    }
+
+    let mut normalized = vec![0.0f32; w * h * 3];
+
+    for i in 0..(w * h) {
+        let (r, g, b) = match format {
+            PixelFormat::Rgba8888 => {
+                let base = i * 4;
+                (
+                    pixels[base] as f32 / 255.0,
+                    pixels[base + 1] as f32 / 255.0,
+                    pixels[base + 2] as f32 / 255.0,
+                )
+            }
+            PixelFormat::Rgba1010102 => {
+                let base = i * 4;
+                let packed = u32::from_le_bytes([
+                    pixels[base],
+                    pixels[base + 1],
+                    pixels[base + 2],
+                    pixels[base + 3],
+                ]);
+                (
+                    (packed & 0x3FF) as f32 / 1023.0,
+                    ((packed >> 10) & 0x3FF) as f32 / 1023.0,
+                    ((packed >> 20) & 0x3FF) as f32 / 1023.0,
+                )
+            }
+            PixelFormat::RgbaF16 => {
+                let base = i * 8;
+                let r_h = u16::from_le_bytes([pixels[base], pixels[base + 1]]);
+                let g_h = u16::from_le_bytes([pixels[base + 2], pixels[base + 3]]);
+                let b_h = u16::from_le_bytes([pixels[base + 4], pixels[base + 5]]);
+                (f16_to_f32(r_h), f16_to_f32(g_h), f16_to_f32(b_h))
+            }
+        };
+
+        let out_idx = i * 3;
+        normalized[out_idx] = r;
+        normalized[out_idx + 1] = g;
+        normalized[out_idx + 2] = b;
+    }
+
+    Ok(normalized)
+}
+
+/// Apply transfer function to a normalized (gamma-space) buffer, producing linear values.
+///
+/// Used by the auto-tonemap path which needs linear HDR for tone mapping.
+fn linearize_normalized(normalized: &[f32], transfer: ColorTransfer) -> Result<Vec<f32>> {
+    let peak = reference_display_peak_nits(transfer);
+    let scale_to_sdr = peak / SDR_WHITE_NITS;
+    let npx = normalized.len() / 3;
+    let mut linear = vec![0.0f32; normalized.len()];
+
+    for i in 0..npx {
+        let idx = i * 3;
+        let r = normalized[idx];
+        let g = normalized[idx + 1];
+        let b = normalized[idx + 2];
+
+        let (r_lin, g_lin, b_lin) = match transfer {
+            ColorTransfer::Srgb => (srgb_inv_oetf(r), srgb_inv_oetf(g), srgb_inv_oetf(b)),
+            ColorTransfer::Linear => (r * scale_to_sdr, g * scale_to_sdr, b * scale_to_sdr),
+            ColorTransfer::Pq => {
+                let rl = pq_inv_oetf(r) * scale_to_sdr;
+                let gl = pq_inv_oetf(g) * scale_to_sdr;
+                let bl = pq_inv_oetf(b) * scale_to_sdr;
+                (rl, gl, bl)
+            }
+            ColorTransfer::Hlg => {
+                let rl = hlg_inv_oetf(r);
+                let gl = hlg_inv_oetf(g);
+                let bl = hlg_inv_oetf(b);
+                let [ro, go, bo] = hlg_ootf_approx(rl, gl, bl);
+                (ro * scale_to_sdr, go * scale_to_sdr, bo * scale_to_sdr)
+            }
+        };
+
+        linear[idx] = r_lin;
+        linear[idx + 1] = g_lin;
+        linear[idx + 2] = b_lin;
     }
 
     Ok(linear)
@@ -673,21 +819,19 @@ impl Encoder {
             .as_ref()
             .ok_or_else(|| Error::InvalidParam("HDR input not set".into()))?;
 
-        // Decode HDR to linear RGB
-        let hdr_linear = decode_pixels_to_linear(
+        // Decode HDR to normalized gamma space (no transfer function applied)
+        let hdr_normalized = decode_pixels_to_normalized(
             hdr_pixels,
             self.hdr_width,
             self.hdr_height,
             self.hdr_format,
-            self.hdr_transfer,
-            self.hdr_gamut,
         )?;
 
         let w = self.hdr_width as usize;
         let h = self.hdr_height as usize;
 
         // Resolve SDR: use raw pixels, compressed JPEG, or auto-tonemap from HDR
-        let (sdr_jpeg_data, sdr_linear) = if let Some(sdr_pixels) = &self.sdr_pixels {
+        let (sdr_jpeg_data, sdr_gamma) = if let Some(sdr_pixels) = &self.sdr_pixels {
             // Raw SDR path: decode RGBA8888 directly, no JPEG losses
             if self.sdr_width != self.hdr_width || self.sdr_height != self.hdr_height {
                 return Err(Error::InvalidParam(format!(
@@ -703,16 +847,13 @@ impl Encoder {
                     sdr_pixels.len(),
                 )));
             }
-            // Convert RGBA8888 to linear RGB via srgb_inv_oetf
-            let mut lin = vec![0.0f32; npx * 3];
+            // Keep SDR in sRGB gamma space (generate_gainmap averages in gamma)
+            let mut gamma = vec![0.0f32; npx * 3];
             let mut sdr_rgb = vec![0u8; npx * 3];
             for i in 0..npx {
-                let r = sdr_pixels[i * 4] as f32 / 255.0;
-                let g = sdr_pixels[i * 4 + 1] as f32 / 255.0;
-                let b = sdr_pixels[i * 4 + 2] as f32 / 255.0;
-                lin[i * 3] = srgb_inv_oetf(r);
-                lin[i * 3 + 1] = srgb_inv_oetf(g);
-                lin[i * 3 + 2] = srgb_inv_oetf(b);
+                gamma[i * 3] = sdr_pixels[i * 4] as f32 / 255.0;
+                gamma[i * 3 + 1] = sdr_pixels[i * 4 + 1] as f32 / 255.0;
+                gamma[i * 3 + 2] = sdr_pixels[i * 4 + 2] as f32 / 255.0;
                 // Also build RGB for JPEG encoding
                 sdr_rgb[i * 3] = sdr_pixels[i * 4];
                 sdr_rgb[i * 3 + 1] = sdr_pixels[i * 4 + 1];
@@ -725,7 +866,7 @@ impl Encoder {
                 self.hdr_height,
                 self.quality,
             )?;
-            (AutoSdr::Generated(jpeg), lin)
+            (AutoSdr::Generated(jpeg), gamma)
         } else if let Some(sdr_jpeg) = &self.sdr_jpeg {
             let sdr_decoded = crate::jpeg::decode::decode_jpeg(sdr_jpeg)?;
             if sdr_decoded.width != self.hdr_width || sdr_decoded.height != self.hdr_height {
@@ -734,34 +875,40 @@ impl Encoder {
                     sdr_decoded.width, sdr_decoded.height, self.hdr_width, self.hdr_height,
                 )));
             }
-            let lin = {
-                let mut lin = vec![0.0f32; w * h * 3];
+            let gamma = {
+                let mut gamma = vec![0.0f32; w * h * 3];
                 for i in 0..(w * h) {
                     let base = i * 3;
-                    lin[base] = srgb_inv_oetf(sdr_decoded.pixels[base] as f32 / 255.0);
-                    lin[base + 1] = srgb_inv_oetf(sdr_decoded.pixels[base + 1] as f32 / 255.0);
-                    lin[base + 2] = srgb_inv_oetf(sdr_decoded.pixels[base + 2] as f32 / 255.0);
+                    gamma[base] = sdr_decoded.pixels[base] as f32 / 255.0;
+                    gamma[base + 1] = sdr_decoded.pixels[base + 1] as f32 / 255.0;
+                    gamma[base + 2] = sdr_decoded.pixels[base + 2] as f32 / 255.0;
                 }
-                lin
+                gamma
             };
             let icc = sdr_decoded.icc_profile;
-            (AutoSdr::Provided(sdr_jpeg.clone(), icc), lin)
+            (AutoSdr::Provided(sdr_jpeg.clone(), icc), gamma)
         } else {
             // Auto tone-map HDR → SDR
+            // Linearize HDR for tone mapping (need linear values for global_tonemap)
+            let hdr_linear = linearize_normalized(&hdr_normalized, self.hdr_transfer)?;
             let headroom = self.target_display_peak_nits / SDR_WHITE_NITS;
             let mut sdr_rgb = vec![0u8; w * h * 3];
-            let mut sdr_lin = vec![0.0f32; w * h * 3];
+            let mut sdr_gamma = vec![0.0f32; w * h * 3];
             for i in 0..(w * h) {
                 let base = i * 3;
                 let rgb = [hdr_linear[base], hdr_linear[base + 1], hdr_linear[base + 2]];
                 let (tm_rgb, _, _) = global_tonemap(rgb, headroom, false);
-                sdr_lin[base] = tm_rgb[0];
-                sdr_lin[base + 1] = tm_rgb[1];
-                sdr_lin[base + 2] = tm_rgb[2];
-                // Encode to sRGB gamma for JPEG
-                sdr_rgb[base] = (srgb_oetf(tm_rgb[0].clamp(0.0, 1.0)) * 255.0 + 0.5) as u8;
-                sdr_rgb[base + 1] = (srgb_oetf(tm_rgb[1].clamp(0.0, 1.0)) * 255.0 + 0.5) as u8;
-                sdr_rgb[base + 2] = (srgb_oetf(tm_rgb[2].clamp(0.0, 1.0)) * 255.0 + 0.5) as u8;
+                // Encode to sRGB gamma for JPEG and for gain map (gamma-space input)
+                let r_gamma = srgb_oetf(tm_rgb[0].clamp(0.0, 1.0));
+                let g_gamma = srgb_oetf(tm_rgb[1].clamp(0.0, 1.0));
+                let b_gamma = srgb_oetf(tm_rgb[2].clamp(0.0, 1.0));
+                sdr_rgb[base] = (r_gamma * 255.0 + 0.5) as u8;
+                sdr_rgb[base + 1] = (g_gamma * 255.0 + 0.5) as u8;
+                sdr_rgb[base + 2] = (b_gamma * 255.0 + 0.5) as u8;
+                // Use the u8-quantized values for gain map to match C++ behavior
+                sdr_gamma[base] = sdr_rgb[base] as f32 / 255.0;
+                sdr_gamma[base + 1] = sdr_rgb[base + 1] as f32 / 255.0;
+                sdr_gamma[base + 2] = sdr_rgb[base + 2] as f32 / 255.0;
             }
             let jpeg = crate::jpeg::encode::encode_rgb_to_jpeg(
                 &sdr_rgb,
@@ -769,17 +916,18 @@ impl Encoder {
                 self.hdr_height,
                 self.quality,
             )?;
-            (AutoSdr::Generated(jpeg), sdr_lin)
+            (AutoSdr::Generated(jpeg), sdr_gamma)
         };
 
-        // Generate gain map
+        // Generate gain map (inputs are in gamma space; generate_gainmap linearizes per-block)
         let (gainmap, metadata) = generate_gainmap(
-            &sdr_linear,
-            &hdr_linear,
+            &sdr_gamma,
+            &hdr_normalized,
             self.hdr_width,
             self.hdr_height,
             self.sdr_gamut,
             self.hdr_gamut,
+            self.hdr_transfer,
             self.gainmap_scale,
             self.multichannel,
             self.target_display_peak_nits,
@@ -859,6 +1007,7 @@ mod tests {
             height as u32,
             ColorGamut::Bt709,
             ColorGamut::Bt709,
+            ColorTransfer::Srgb,
             1,
             false,
             1.0,
@@ -891,6 +1040,7 @@ mod tests {
             height as u32,
             ColorGamut::Bt709,
             ColorGamut::Bt709,
+            ColorTransfer::Srgb,
             1,
             false,
             4.0 * SDR_WHITE_NITS,
@@ -918,6 +1068,7 @@ mod tests {
             height as u32,
             ColorGamut::Bt709,
             ColorGamut::Bt709,
+            ColorTransfer::Srgb,
             2,
             false,
             1.0,
@@ -941,6 +1092,7 @@ mod tests {
             height as u32,
             ColorGamut::Bt709,
             ColorGamut::Bt709,
+            ColorTransfer::Srgb,
             1,
             true,
             1.0,
@@ -974,6 +1126,7 @@ mod tests {
             height as u32,
             ColorGamut::Bt709,
             ColorGamut::Bt709,
+            ColorTransfer::Srgb,
             1,
             false,
             1600.0,
@@ -1026,6 +1179,7 @@ mod tests {
             height as u32,
             ColorGamut::Bt709,
             ColorGamut::Bt709,
+            ColorTransfer::Srgb,
             1,
             false,
             1600.0,
