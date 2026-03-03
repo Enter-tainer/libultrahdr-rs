@@ -10,11 +10,11 @@ const PRIMARIES_BT2100: [[f32; 2]; 3] =
     [[0.7080, 0.2920], [0.1700, 0.7970], [0.1310, 0.0460]];
 
 /// Convert a 4-byte big-endian s15Fixed16Number to `f32`.
-pub fn s15fixed16_to_f32(bytes: &[u8]) -> f32 {
-    let arr: [u8; 4] = bytes
-        .try_into()
-        .expect("s15fixed16_to_f32 requires exactly 4 bytes");
-    i32::from_be_bytes(arr) as f32 / 65536.0
+///
+/// Returns `None` if the slice is not exactly 4 bytes.
+pub fn s15fixed16_to_f32(bytes: &[u8]) -> Option<f32> {
+    let arr: [u8; 4] = bytes.try_into().ok()?;
+    Some(i32::from_be_bytes(arr) as f32 / 65536.0)
 }
 
 fn tag_data<'a>(icc: &'a [u8], sig: &[u8; 4]) -> Option<&'a [u8]> {
@@ -52,9 +52,9 @@ fn parse_xyz_tag(icc: &[u8], tag: &[u8; 4]) -> Option<[f32; 3]> {
     if data.len() < 20 || &data[..4] != b"XYZ " {
         return None;
     }
-    let x = s15fixed16_to_f32(&data[8..12]);
-    let y = s15fixed16_to_f32(&data[12..16]);
-    let z = s15fixed16_to_f32(&data[16..20]);
+    let x = s15fixed16_to_f32(&data[8..12])?;
+    let y = s15fixed16_to_f32(&data[12..16])?;
+    let z = s15fixed16_to_f32(&data[16..20])?;
     Some([x, y, z])
 }
 
@@ -458,16 +458,16 @@ mod tests {
 
     #[test]
     fn s15fixed16_conversion() {
-        let val = s15fixed16_to_f32(&0x00010000_i32.to_be_bytes());
+        let val = s15fixed16_to_f32(&0x00010000_i32.to_be_bytes()).unwrap();
         assert!((val - 1.0).abs() < 1e-6);
 
-        let val = s15fixed16_to_f32(&0x00008000_i32.to_be_bytes());
+        let val = s15fixed16_to_f32(&0x00008000_i32.to_be_bytes()).unwrap();
         assert!((val - 0.5).abs() < 1e-6);
     }
 
     #[test]
     fn parse_xyz_tag_valid() {
-        let xyz = s15fixed16_to_f32(&[0x00, 0x01, 0x00, 0x00]);
+        let xyz = s15fixed16_to_f32(&[0x00, 0x01, 0x00, 0x00]).unwrap();
         assert!((xyz - 1.0).abs() < 1e-5);
     }
 
@@ -505,6 +505,20 @@ mod tests {
         let icc = write_icc_profile(ColorTransfer::Pq, ColorGamut::Bt2100);
         let detected = detect_color_gamut(&icc);
         assert_eq!(detected, Some(ColorGamut::Bt2100));
+    }
+
+    #[test]
+    fn s15fixed16_short_slice_returns_none() {
+        // s15fixed16_to_f32 should return None for short slices, not panic
+        assert_eq!(s15fixed16_to_f32(&[0x00, 0x01]), None);
+        assert_eq!(s15fixed16_to_f32(&[]), None);
+    }
+
+    #[test]
+    fn s15fixed16_exact_4_bytes_returns_some() {
+        let val = s15fixed16_to_f32(&0x00010000_i32.to_be_bytes());
+        assert!(val.is_some());
+        assert!((val.unwrap() - 1.0).abs() < 1e-6);
     }
 
     #[test]

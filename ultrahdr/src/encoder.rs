@@ -150,7 +150,7 @@ fn metadata_to_frac(meta: &GainMapMetadata) -> GainMapMetadataFrac {
     let denom = 10000u32;
 
     let to_n = |val: f32| -> i32 { (val * denom as f32) as i32 };
-    let to_n_u = |val: f32| -> u32 { (val * denom as f32) as u32 };
+    let to_n_u = |val: f32| -> u32 { (val.max(0.0) * denom as f32) as u32 };
 
     let all_identical = meta.are_all_channels_identical();
     let ch = if all_identical { 1 } else { 3 };
@@ -241,11 +241,7 @@ pub fn assemble_ultrahdr(
     // SOI
     out.extend_from_slice(&[0xFF, 0xD8]);
 
-    // Find where in the original JPEG we should insert our metadata segments.
-    // We insert after any existing EXIF (APP1) segments but before other data.
-    let mut _insert_pos = 2usize; // after SOI
-
-    // Copy existing APP0/APP1 (EXIF) segments first
+    // Copy existing APP0/APP1 (EXIF) segments first, inserting our metadata after them.
     for seg in &segments.segments {
         if seg.marker == 0xE0 || seg.marker == 0xE1 {
             // Check if this is already an XMP or gain map segment; skip if so
@@ -258,7 +254,6 @@ pub fn assemble_ultrahdr(
             let len = (seg.data.len() + 2) as u16;
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(&seg.data);
-            _insert_pos = seg.offset + 2 + seg.data.len() + 2; // past this segment in source
         } else {
             break;
         }
@@ -308,7 +303,6 @@ pub fn assemble_ultrahdr(
 
     // Reserve space for MPF APP2 segment
     let mpf_data_size = calculate_mpf_size();
-    let _mpf_seg_start = out.len();
     out.push(0xFF);
     out.push(0xE2); // APP2
     let mpf_seg_len = (mpf_data_size + 2) as u16;
@@ -892,6 +886,17 @@ mod tests {
         assert!(last_soi > 0, "should have a secondary JPEG");
         assert_eq!(out[last_soi], 0xFF);
         assert_eq!(out[last_soi + 1], 0xD8);
+    }
+
+    #[test]
+    fn metadata_to_frac_clamps_negative_headroom() {
+        // hdr_capacity_min < 1.0 means log2 < 0; to_n_u should clamp to 0
+        let sdr_jpeg = create_minimal_jpeg();
+        let gainmap_jpeg = create_minimal_jpeg();
+        let mut meta = default_test_metadata();
+        meta.hdr_capacity_min = 0.5; // log2(0.5) = -1.0, would be negative
+        let result = assemble_ultrahdr(&sdr_jpeg, &gainmap_jpeg, &meta, None, None);
+        assert!(result.is_ok(), "should handle sub-1.0 hdr_capacity_min");
     }
 
     // Task 27: Encoder builder API
