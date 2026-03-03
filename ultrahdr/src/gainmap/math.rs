@@ -152,6 +152,87 @@ pub fn sample_map_bilinear(
     e1 * (w1 / total) + e2 * (w2 / total) + e3 * (w3 / total) + e4 * (w4 / total)
 }
 
+/// Bilinear interpolation for multi-channel (RGB) gain map upsampling.
+///
+/// Returns per-channel gain values `[r, g, b]`.
+pub fn sample_map_bilinear_rgb(
+    map: &[u8],
+    map_w: u32,
+    map_h: u32,
+    scale_factor: f32,
+    x: u32,
+    y: u32,
+) -> [f32; 3] {
+    let x_map = x as f32 / scale_factor;
+    let y_map = y as f32 / scale_factor;
+
+    let x_lower = (x_map.floor() as u32).min(map_w - 1);
+    let x_upper = (x_lower + 1).min(map_w - 1);
+    let y_lower = (y_map.floor() as u32).min(map_h - 1);
+    let y_upper = (y_lower + 1).min(map_h - 1);
+
+    let to_float = |v: u8| v as f32 / 255.0;
+    let pyth_dist = |dx: f32, dy: f32| (dx * dx + dy * dy).sqrt();
+
+    let idx = |px: u32, py: u32| (px + py * map_w) as usize * 3;
+
+    let i1 = idx(x_lower, y_lower);
+    let e1 = [
+        to_float(map[i1]),
+        to_float(map[i1 + 1]),
+        to_float(map[i1 + 2]),
+    ];
+    let e1_dist = pyth_dist(x_map - x_lower as f32, y_map - y_lower as f32);
+    if e1_dist == 0.0 {
+        return e1;
+    }
+
+    let i2 = idx(x_lower, y_upper);
+    let e2 = [
+        to_float(map[i2]),
+        to_float(map[i2 + 1]),
+        to_float(map[i2 + 2]),
+    ];
+    let e2_dist = pyth_dist(x_map - x_lower as f32, y_map - y_upper as f32);
+    if e2_dist == 0.0 {
+        return e2;
+    }
+
+    let i3 = idx(x_upper, y_lower);
+    let e3 = [
+        to_float(map[i3]),
+        to_float(map[i3 + 1]),
+        to_float(map[i3 + 2]),
+    ];
+    let e3_dist = pyth_dist(x_map - x_upper as f32, y_map - y_lower as f32);
+    if e3_dist == 0.0 {
+        return e3;
+    }
+
+    let i4 = idx(x_upper, y_upper);
+    let e4 = [
+        to_float(map[i4]),
+        to_float(map[i4 + 1]),
+        to_float(map[i4 + 2]),
+    ];
+    let e4_dist = pyth_dist(x_map - x_upper as f32, y_map - y_upper as f32);
+    if e4_dist == 0.0 {
+        return e4;
+    }
+
+    let w1 = 1.0 / e1_dist;
+    let w2 = 1.0 / e2_dist;
+    let w3 = 1.0 / e3_dist;
+    let w4 = 1.0 / e4_dist;
+    let total = w1 + w2 + w3 + w4;
+
+    [
+        e1[0] * (w1 / total) + e2[0] * (w2 / total) + e3[0] * (w3 / total) + e4[0] * (w4 / total),
+        e1[1] * (w1 / total) + e2[1] * (w2 / total) + e3[1] * (w3 / total) + e4[1] * (w4 / total),
+        e1[2] * (w1 / total) + e2[2] * (w2 / total) + e3[2] * (w3 / total) + e4[2] * (w4 / total),
+    ]
+}
+
 /// Reinhard-style tone mapping operator.
 fn reinhard_map(y_hdr: f32, headroom: f32) -> f32 {
     let out = (1.0 + y_hdr / (headroom * headroom)) / (1.0 + y_hdr);

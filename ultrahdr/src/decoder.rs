@@ -3,7 +3,9 @@
 use crate::color::Color;
 use crate::color::transfer::{hlg_oetf, pq_oetf, srgb_inv_oetf, srgb_oetf};
 use crate::error::{Error, Result};
-use crate::gainmap::math::{apply_gain_multi, apply_gain_single, sample_map_bilinear};
+use crate::gainmap::math::{
+    apply_gain_multi, apply_gain_single, sample_map_bilinear, sample_map_bilinear_rgb,
+};
 use crate::gainmap::metadata::{
     decode_gainmap_metadata, fraction_to_float, parse_xmp_gainmap_metadata,
 };
@@ -303,7 +305,13 @@ pub fn apply_gainmap_to_sdr(
         )));
     }
 
-    let expected_map_size = map_width * map_height;
+    // Detect gain map channel count from buffer size.
+    // Grayscale: 1 byte/pixel, RGB: 3 bytes/pixel.
+    let map_pixels = map_width * map_height;
+    let gainmap_channels = gainmap.len() / map_pixels;
+    let gainmap_is_rgb = gainmap_channels >= 3;
+
+    let expected_map_size = map_pixels * if gainmap_is_rgb { 3 } else { 1 };
     if gainmap.len() < expected_map_size {
         return Err(Error::InvalidParam(format!(
             "gain map buffer too small: {} < {}",
@@ -353,30 +361,48 @@ pub fn apply_gainmap_to_sdr(
             let b_lin = srgb_inv_oetf(b_u8 as f32 / 255.0);
             let sdr_color = Color::new(r_lin, g_lin, b_lin);
 
-            // Sample gain map
-            let gain = sample_map_bilinear(
-                gainmap,
-                map_width as u32,
-                map_height as u32,
-                scale_factor,
-                x as u32,
-                y as u32,
-            );
-
-            // Apply weighted gain (interpolate between no-boost and full-boost)
-            let weighted_gain = gain * weight;
-
-            // Apply gain to reconstruct HDR.
-            // NOTE: When multi_channel is true (metadata has per-channel boost values),
-            // we still use a single sampled gain value broadcast to all 3 channels.
-            // This is correct for single-channel (grayscale) gain maps, which is the
-            // default encoding mode. True per-channel gain map sampling (where the gain
-            // map JPEG is RGB and each channel is sampled independently) is not yet
-            // implemented — the current encoder defaults to multichannel=false.
-            let hdr_color = if multi_channel {
-                apply_gain_multi(sdr_color, [weighted_gain; 3], metadata)
+            // Sample gain map and apply weighted gain.
+            // For RGB gain maps, sample each channel independently.
+            // For grayscale gain maps, broadcast the single value.
+            let hdr_color = if gainmap_is_rgb && multi_channel {
+                let gains = sample_map_bilinear_rgb(
+                    gainmap,
+                    map_width as u32,
+                    map_height as u32,
+                    scale_factor,
+                    x as u32,
+                    y as u32,
+                );
+                let weighted = [gains[0] * weight, gains[1] * weight, gains[2] * weight];
+                apply_gain_multi(sdr_color, weighted, metadata)
             } else {
-                apply_gain_single(sdr_color, weighted_gain, metadata)
+                let gain = if gainmap_is_rgb {
+                    // RGB gain map but identical metadata per channel: use luma of RGB
+                    let gains = sample_map_bilinear_rgb(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        scale_factor,
+                        x as u32,
+                        y as u32,
+                    );
+                    gains[0] * 0.2126 + gains[1] * 0.7152 + gains[2] * 0.0722
+                } else {
+                    sample_map_bilinear(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        scale_factor,
+                        x as u32,
+                        y as u32,
+                    )
+                };
+                let weighted_gain = gain * weight;
+                if multi_channel {
+                    apply_gain_multi(sdr_color, [weighted_gain; 3], metadata)
+                } else {
+                    apply_gain_single(sdr_color, weighted_gain, metadata)
+                }
             };
 
             // Apply output transfer function
