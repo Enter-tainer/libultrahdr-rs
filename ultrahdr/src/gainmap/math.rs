@@ -39,10 +39,10 @@ impl GainLut {
                 1.0
             };
 
-            for idx in 0..GAIN_LUT_SIZE {
+            for (idx, entry) in tables[ch].iter_mut().enumerate().take(GAIN_LUT_SIZE) {
                 let g = idx as f32 / (GAIN_LUT_SIZE - 1) as f32;
                 let log_boost = log2_min * (1.0 - g) + log2_max * g;
-                tables[ch][idx] = (log_boost * weight).exp2();
+                *entry = (log_boost * weight).exp2();
             }
         }
 

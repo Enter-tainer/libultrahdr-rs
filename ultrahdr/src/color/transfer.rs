@@ -91,8 +91,8 @@ const LUT_SIZE: usize = 65536;
 /// 256-entry LUT for sRGB inverse OETF: input u8 → linear f32.
 static SRGB_INV_OETF_LUT: LazyLock<[f32; 256]> = LazyLock::new(|| {
     let mut lut = [0.0f32; 256];
-    for i in 0..256 {
-        lut[i] = srgb_inv_oetf(i as f32 / 255.0);
+    for (i, val) in lut.iter_mut().enumerate() {
+        *val = srgb_inv_oetf(i as f32 / 255.0);
     }
     lut
 });
