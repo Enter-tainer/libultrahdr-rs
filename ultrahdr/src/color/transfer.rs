@@ -86,7 +86,7 @@ use crate::types::{ColorTransfer, HLG_MAX_NITS, PQ_MAX_NITS, SDR_WHITE_NITS};
 // LUT-based fast approximations
 // ---------------------------------------------------------------------------
 
-const LUT_SIZE: usize = 65536;
+pub const LUT_SIZE: usize = 65536;
 
 /// 256-entry LUT for sRGB inverse OETF: input u8 → linear f32.
 static SRGB_INV_OETF_LUT: LazyLock<[f32; 256]> = LazyLock::new(|| {
@@ -156,6 +156,66 @@ pub fn hlg_inv_ootf_approx_lut(e: f32) -> f32 {
     }
     let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
     HLG_INV_OOTF_LUT[idx.min(LUT_SIZE - 1)]
+}
+
+/// Combined HLG inverse OOTF + OETF: hlg_oetf(pow(x, 1/1.2)).
+/// Single LUT lookup replaces the two chained lookups.
+static HLG_COMBINED_LUT: LazyLock<Vec<f32>> = LazyLock::new(|| {
+    let inv_gamma = 1.0f32 / 1.2;
+    (0..LUT_SIZE)
+        .map(|i| {
+            let x = i as f32 / (LUT_SIZE - 1) as f32;
+            hlg_oetf(x.powf(inv_gamma))
+        })
+        .collect()
+});
+
+/// Fast combined HLG inverse OOTF + OETF via single 65536-entry lookup.
+#[inline(always)]
+pub fn hlg_combined_lut(e: f32) -> f32 {
+    if e <= 0.0 {
+        return 0.0;
+    }
+    let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
+    HLG_COMBINED_LUT[idx.min(LUT_SIZE - 1)]
+}
+
+/// Get references to all LUTs used during decode. Call once outside the hot loop
+/// to avoid per-pixel LazyLock atomic checks.
+pub struct TransferLuts {
+    pub pq_oetf: &'static [f32],
+    pub hlg_combined: &'static [f32],
+    /// 256-entry sRGB inverse OETF: input u8 index → linear f32 (exact for u8).
+    pub srgb_inv_u8: &'static [f32; 256],
+}
+
+impl TransferLuts {
+    /// Force-initialize all LUTs and return references.
+    pub fn init() -> Self {
+        Self {
+            pq_oetf: &PQ_OETF_LUT,
+            hlg_combined: &HLG_COMBINED_LUT,
+            srgb_inv_u8: &SRGB_INV_OETF_LUT,
+        }
+    }
+
+    #[inline(always)]
+    pub fn pq_oetf_lookup(&self, e: f32) -> f32 {
+        if e <= 0.0 {
+            return 0.0;
+        }
+        let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
+        self.pq_oetf[idx.min(LUT_SIZE - 1)]
+    }
+
+    #[inline(always)]
+    pub fn hlg_combined_lookup(&self, e: f32) -> f32 {
+        if e <= 0.0 {
+            return 0.0;
+        }
+        let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
+        self.hlg_combined[idx.min(LUT_SIZE - 1)]
+    }
 }
 
 // ---------------------------------------------------------------------------

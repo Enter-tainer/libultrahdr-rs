@@ -1,9 +1,9 @@
 //! UltraHDR JPEG decoder: extract gain map, apply it, and produce HDR output.
 
 use crate::color::Color;
-use crate::color::transfer::{hlg_oetf_lut, pq_oetf_lut, srgb_inv_oetf_lut_1024, srgb_oetf};
+use crate::color::transfer::{LUT_SIZE, TransferLuts, srgb_oetf};
 use crate::error::{Error, Result};
-use crate::gainmap::math::{GainLut, sample_map_bilinear, sample_map_bilinear_rgb};
+use crate::gainmap::math::{GainLut, ShepardsIDW, sample_map_bilinear, sample_map_bilinear_rgb};
 use crate::gainmap::metadata::{
     decode_gainmap_metadata, fraction_to_float, parse_xmp_gainmap_metadata,
 };
@@ -296,7 +296,69 @@ pub fn apply_gainmap_to_sdr(
     output_transfer: ColorTransfer,
     output_format: PixelFormat,
 ) -> Result<Vec<u8>> {
-    let expected_sdr_size = sdr_width * sdr_height * 4;
+    apply_gainmap_inner(
+        sdr_pixels,
+        sdr_width,
+        sdr_height,
+        4, // RGBA input: 4 bytes per pixel
+        gainmap,
+        map_width,
+        map_height,
+        metadata,
+        max_display_boost,
+        output_transfer,
+        output_format,
+    )
+}
+
+/// Apply a gain map to SDR pixels in RGB888 format (3 bytes per pixel).
+///
+/// This avoids the intermediate RGB-to-RGBA conversion when decoding from JPEG.
+/// Alpha is implicitly 255 for all output pixels.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_gainmap_to_sdr_rgb(
+    sdr_pixels: &[u8],
+    sdr_width: usize,
+    sdr_height: usize,
+    gainmap: &[u8],
+    map_width: usize,
+    map_height: usize,
+    metadata: &GainMapMetadata,
+    max_display_boost: f32,
+    output_transfer: ColorTransfer,
+    output_format: PixelFormat,
+) -> Result<Vec<u8>> {
+    apply_gainmap_inner(
+        sdr_pixels,
+        sdr_width,
+        sdr_height,
+        3, // RGB input: 3 bytes per pixel
+        gainmap,
+        map_width,
+        map_height,
+        metadata,
+        max_display_boost,
+        output_transfer,
+        output_format,
+    )
+}
+
+/// Inner implementation: apply gain map with configurable SDR bytes-per-pixel (3 or 4).
+#[allow(clippy::too_many_arguments)]
+fn apply_gainmap_inner(
+    sdr_pixels: &[u8],
+    sdr_width: usize,
+    sdr_height: usize,
+    sdr_bpp: usize,
+    gainmap: &[u8],
+    map_width: usize,
+    map_height: usize,
+    metadata: &GainMapMetadata,
+    max_display_boost: f32,
+    output_transfer: ColorTransfer,
+    output_format: PixelFormat,
+) -> Result<Vec<u8>> {
+    let expected_sdr_size = sdr_width * sdr_height * sdr_bpp;
     if sdr_pixels.len() < expected_sdr_size {
         return Err(Error::InvalidParam(format!(
             "SDR pixel buffer too small: {} < {}",
@@ -344,11 +406,25 @@ pub fn apply_gainmap_to_sdr(
     let scale_factor = scale_x.max(scale_y);
 
     let multi_channel = !metadata.are_all_channels_identical();
-    let bpp = output_format.bytes_per_pixel();
-    let mut output = vec![0u8; sdr_width * sdr_height * bpp];
+    let out_bpp = output_format.bytes_per_pixel();
+    let mut output = vec![0u8; sdr_width * sdr_height * out_bpp];
 
     // Pre-compute gain factor LUT (replaces per-pixel log2/exp2/powf).
     let gain_lut = GainLut::new(metadata, weight);
+
+    // Force-initialize all transfer function LUTs once, outside the hot loop.
+    // This avoids per-pixel LazyLock atomic checks.
+    let luts = TransferLuts::init();
+
+    // Pre-compute Shepard's IDW weight table when scale factor is an integer
+    // (avoids per-pixel sqrt). Matches C++ ShepardsIDW optimization.
+    let scale_factor_rnd = scale_factor.round() as usize;
+    let idw_table =
+        if (scale_factor - scale_factor.floor()).abs() < f32::EPSILON && scale_factor_rnd > 0 {
+            Some(ShepardsIDW::new(scale_factor_rnd))
+        } else {
+            None
+        };
 
     // Constants from C++ libultrahdr (gainmapmath.h):
     const SDR_WHITE_NITS: f32 = 203.0;
@@ -358,43 +434,98 @@ pub fn apply_gainmap_to_sdr(
     const PQ_SCALE: f32 = SDR_WHITE_NITS / PQ_MAX_NITS;
     const HLG_SCALE: f32 = SDR_WHITE_NITS / HLG_MAX_NITS;
 
+    // Pre-select transfer function to avoid per-pixel match in the hot loop.
+    // Each variant returns (r_out, g_out, b_out) from HDR linear color.
+    let pq_lut = luts.pq_oetf;
+    let hlg_lut = luts.hlg_combined;
+    let srgb_inv_u8 = luts.srgb_inv_u8;
+    let lut_max_idx = LUT_SIZE - 1;
+    let lut_scale = lut_max_idx as f32;
+
+    // Inline LUT lookup to avoid function call overhead.
+    #[inline(always)]
+    fn lut_lookup(lut: &[f32], e: f32, scale: f32, max_idx: usize) -> f32 {
+        if e <= 0.0 {
+            return 0.0;
+        }
+        let idx = (e * scale + 0.5) as usize;
+        // SAFETY: idx.min(max_idx) is always < lut.len() when lut.len() == max_idx + 1.
+        unsafe { *lut.get_unchecked(idx.min(max_idx)) }
+    }
+
     // Process a single row of pixels. All read-only data is shared by reference.
     let process_row = |y: usize, row_out: &mut [u8]| {
+        let row_start = y * sdr_width * sdr_bpp;
+        let sdr_row = &sdr_pixels[row_start..row_start + sdr_width * sdr_bpp];
         for x in 0..sdr_width {
-            let px_idx = (y * sdr_width + x) * 4;
-            let r_u8 = sdr_pixels[px_idx];
-            let g_u8 = sdr_pixels[px_idx + 1];
-            let b_u8 = sdr_pixels[px_idx + 2];
-            let a_u8 = sdr_pixels[px_idx + 3];
+            let px_idx = x * sdr_bpp;
+            let r_u8 = sdr_row[px_idx];
+            let g_u8 = sdr_row[px_idx + 1];
+            let b_u8 = sdr_row[px_idx + 2];
+            let a_u8 = if sdr_bpp >= 4 {
+                sdr_row[px_idx + 3]
+            } else {
+                255
+            };
 
-            // Convert SDR to linear via 1024-entry LUT (matches C++ srgbInvOetfLUT)
-            let r_lin = srgb_inv_oetf_lut_1024(r_u8 as f32 / 255.0);
-            let g_lin = srgb_inv_oetf_lut_1024(g_u8 as f32 / 255.0);
-            let b_lin = srgb_inv_oetf_lut_1024(b_u8 as f32 / 255.0);
+            // Convert SDR u8 to linear via 256-entry LUT (exact for u8 input)
+            let r_lin = srgb_inv_u8[r_u8 as usize];
+            let g_lin = srgb_inv_u8[g_u8 as usize];
+            let b_lin = srgb_inv_u8[b_u8 as usize];
             let sdr_color = Color::new(r_lin, g_lin, b_lin);
 
             // Sample gain map and apply gain via LUT.
+            // Use pre-computed ShepardsIDW weights when available (integer scale factor),
+            // otherwise fall back to per-pixel sqrt-based interpolation.
             let hdr_color = if gainmap_is_rgb && multi_channel {
-                let gains = sample_map_bilinear_rgb(
-                    gainmap,
-                    map_width as u32,
-                    map_height as u32,
-                    scale_factor,
-                    x as u32,
-                    y as u32,
-                );
-                gain_lut.apply_multi(sdr_color, gains)
-            } else {
-                let gain = if gainmap_is_rgb {
-                    let gains = sample_map_bilinear_rgb(
+                let gains = if let Some(ref idw) = idw_table {
+                    idw.sample_rgb(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        x as u32,
+                        y as u32,
+                    )
+                } else {
+                    sample_map_bilinear_rgb(
                         gainmap,
                         map_width as u32,
                         map_height as u32,
                         scale_factor,
                         x as u32,
                         y as u32,
-                    );
+                    )
+                };
+                gain_lut.apply_multi(sdr_color, gains)
+            } else {
+                let gain = if gainmap_is_rgb {
+                    let gains = if let Some(ref idw) = idw_table {
+                        idw.sample_rgb(
+                            gainmap,
+                            map_width as u32,
+                            map_height as u32,
+                            x as u32,
+                            y as u32,
+                        )
+                    } else {
+                        sample_map_bilinear_rgb(
+                            gainmap,
+                            map_width as u32,
+                            map_height as u32,
+                            scale_factor,
+                            x as u32,
+                            y as u32,
+                        )
+                    };
                     gains[0] * 0.2126 + gains[1] * 0.7152 + gains[2] * 0.0722
+                } else if let Some(ref idw) = idw_table {
+                    idw.sample(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        x as u32,
+                        y as u32,
+                    )
                 } else {
                     sample_map_bilinear(
                         gainmap,
@@ -412,7 +543,7 @@ pub fn apply_gainmap_to_sdr(
                 }
             };
 
-            // Apply output transfer function (LUT for PQ/HLG).
+            // Apply output transfer function.
             let (r_out, g_out, b_out) = match output_transfer {
                 ColorTransfer::Linear => (
                     hdr_color.r.clamp(0.0, MAX_LINEAR),
@@ -428,24 +559,26 @@ pub fn apply_gainmap_to_sdr(
                     let r = (hdr_color.r * PQ_SCALE).clamp(0.0, 1.0);
                     let g = (hdr_color.g * PQ_SCALE).clamp(0.0, 1.0);
                     let b = (hdr_color.b * PQ_SCALE).clamp(0.0, 1.0);
-                    (pq_oetf_lut(r), pq_oetf_lut(g), pq_oetf_lut(b))
+                    (
+                        lut_lookup(pq_lut, r, lut_scale, lut_max_idx),
+                        lut_lookup(pq_lut, g, lut_scale, lut_max_idx),
+                        lut_lookup(pq_lut, b, lut_scale, lut_max_idx),
+                    )
                 }
                 ColorTransfer::Hlg => {
-                    // C++ uses direct powf (hlgInverseOotfApprox), not LUT
-                    const INV_OOTF_GAMMA: f32 = 1.0 / 1.2;
                     let r = (hdr_color.r * HLG_SCALE).clamp(0.0, 1.0);
                     let g = (hdr_color.g * HLG_SCALE).clamp(0.0, 1.0);
                     let b = (hdr_color.b * HLG_SCALE).clamp(0.0, 1.0);
                     (
-                        hlg_oetf_lut(r.powf(INV_OOTF_GAMMA)),
-                        hlg_oetf_lut(g.powf(INV_OOTF_GAMMA)),
-                        hlg_oetf_lut(b.powf(INV_OOTF_GAMMA)),
+                        lut_lookup(hlg_lut, r, lut_scale, lut_max_idx),
+                        lut_lookup(hlg_lut, g, lut_scale, lut_max_idx),
+                        lut_lookup(hlg_lut, b, lut_scale, lut_max_idx),
                     )
                 }
             };
 
             // Write output pixel
-            let out_idx = x * bpp;
+            let out_idx = x * out_bpp;
             match output_format {
                 PixelFormat::Rgba8888 => {
                     row_out[out_idx] = (r_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
@@ -475,7 +608,7 @@ pub fn apply_gainmap_to_sdr(
         }
     };
 
-    let row_bytes = sdr_width * bpp;
+    let row_bytes = sdr_width * out_bpp;
 
     #[cfg(feature = "rayon")]
     {
@@ -586,16 +719,9 @@ impl<'a> Decoder<'a> {
         // Decode gain map JPEG
         let gm_decoded = crate::jpeg::decode::decode_jpeg(&extract.gainmap_jpeg)?;
 
-        // Convert primary pixels from RGB to RGBA
-        let sdr_rgba = rgb_to_rgba(
+        // Apply gain map directly from RGB (avoids intermediate RGBA allocation)
+        let hdr_data = apply_gainmap_to_sdr_rgb(
             &primary.pixels,
-            primary.width as usize,
-            primary.height as usize,
-        );
-
-        // Apply gain map
-        let hdr_data = apply_gainmap_to_sdr(
-            &sdr_rgba,
             primary.width as usize,
             primary.height as usize,
             &gm_decoded.pixels,

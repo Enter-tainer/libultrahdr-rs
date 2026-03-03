@@ -195,6 +195,173 @@ pub fn apply_gain_multi(
     )
 }
 
+// ---------------------------------------------------------------------------
+// ShepardsIDW — pre-computed weight tables for fast gain map sampling
+// ---------------------------------------------------------------------------
+
+/// Pre-computed Shepard's inverse distance weighting tables.
+///
+/// Port of `ShepardsIDW` from C++ libultrahdr gainmapmath.h.
+/// When the map scale factor is an integer, weights can be pre-computed once
+/// and reused for every pixel, avoiding per-pixel sqrt operations.
+pub struct ShepardsIDW {
+    scale_factor: usize,
+    /// Normal weights (both right and bottom neighbors exist).
+    weights: Vec<f32>,
+    /// No-right-neighbor weights (right edge of map).
+    weights_nr: Vec<f32>,
+    /// No-bottom-neighbor weights (bottom edge of map).
+    weights_nb: Vec<f32>,
+    /// Corner weights (no right, no bottom).
+    weights_c: Vec<f32>,
+}
+
+impl ShepardsIDW {
+    /// Build weight tables for a given integer scale factor.
+    pub fn new(scale_factor: usize) -> Self {
+        let size = scale_factor * scale_factor * 4;
+        let mut weights = vec![0.0f32; size];
+        let mut weights_nr = vec![0.0f32; size];
+        let mut weights_nb = vec![0.0f32; size];
+        let mut weights_c = vec![0.0f32; size];
+
+        Self::fill(&mut weights, scale_factor, 1, 1);
+        Self::fill(&mut weights_nr, scale_factor, 0, 1);
+        Self::fill(&mut weights_nb, scale_factor, 1, 0);
+        Self::fill(&mut weights_c, scale_factor, 0, 0);
+
+        Self {
+            scale_factor,
+            weights,
+            weights_nr,
+            weights_nb,
+            weights_c,
+        }
+    }
+
+    fn fill(weights: &mut [f32], sf: usize, inc_r: usize, inc_b: usize) {
+        for y in 0..sf {
+            for x in 0..sf {
+                let pos_x = x as f32 / sf as f32;
+                let pos_y = y as f32 / sf as f32;
+                let curr_x = 0.0f32; // floor(pos_x) is always 0 since pos_x < 1
+                let curr_y = 0.0f32;
+                let next_x = inc_r as f32;
+                let next_y = inc_b as f32;
+
+                let idx = y * sf * 4 + x * 4;
+                let e1_dist = ((pos_x - curr_x) * (pos_x - curr_x)
+                    + (pos_y - curr_y) * (pos_y - curr_y))
+                    .sqrt();
+
+                if e1_dist == 0.0 {
+                    weights[idx] = 1.0;
+                    weights[idx + 1] = 0.0;
+                    weights[idx + 2] = 0.0;
+                    weights[idx + 3] = 0.0;
+                } else {
+                    let e1_w = 1.0 / e1_dist;
+                    let e2_dist = ((pos_x - curr_x) * (pos_x - curr_x)
+                        + (pos_y - next_y) * (pos_y - next_y))
+                        .sqrt();
+                    let e2_w = 1.0 / e2_dist;
+                    let e3_dist = ((pos_x - next_x) * (pos_x - next_x)
+                        + (pos_y - curr_y) * (pos_y - curr_y))
+                        .sqrt();
+                    let e3_w = 1.0 / e3_dist;
+                    let e4_dist = ((pos_x - next_x) * (pos_x - next_x)
+                        + (pos_y - next_y) * (pos_y - next_y))
+                        .sqrt();
+                    let e4_w = 1.0 / e4_dist;
+
+                    let total = e1_w + e2_w + e3_w + e4_w;
+                    weights[idx] = e1_w / total;
+                    weights[idx + 1] = e2_w / total;
+                    weights[idx + 2] = e3_w / total;
+                    weights[idx + 3] = e4_w / total;
+                }
+            }
+        }
+    }
+
+    /// Sample a single-channel gain map using pre-computed weights.
+    #[inline]
+    pub fn sample(&self, map: &[u8], map_w: u32, map_h: u32, x: u32, y: u32) -> f32 {
+        let sf = self.scale_factor;
+        let x_lower = ((x as usize / sf) as u32).min(map_w - 1);
+        let x_upper = (x_lower + 1).min(map_w - 1);
+        let y_lower = ((y as usize / sf) as u32).min(map_h - 1);
+        let y_upper = (y_lower + 1).min(map_h - 1);
+
+        let e1 = map[(x_lower + y_lower * map_w) as usize] as f32 / 255.0;
+        let e2 = map[(x_lower + y_upper * map_w) as usize] as f32 / 255.0;
+        let e3 = map[(x_upper + y_lower * map_w) as usize] as f32 / 255.0;
+        let e4 = map[(x_upper + y_upper * map_w) as usize] as f32 / 255.0;
+
+        let offset_x = x as usize % sf;
+        let offset_y = y as usize % sf;
+
+        let w = if x_lower == x_upper && y_lower == y_upper {
+            &self.weights_c
+        } else if x_lower == x_upper {
+            &self.weights_nr
+        } else if y_lower == y_upper {
+            &self.weights_nb
+        } else {
+            &self.weights
+        };
+        let wi = offset_y * sf * 4 + offset_x * 4;
+
+        e1 * w[wi] + e2 * w[wi + 1] + e3 * w[wi + 2] + e4 * w[wi + 3]
+    }
+
+    /// Sample a 3-channel (RGB) gain map using pre-computed weights.
+    #[inline]
+    pub fn sample_rgb(&self, map: &[u8], map_w: u32, map_h: u32, x: u32, y: u32) -> [f32; 3] {
+        let sf = self.scale_factor;
+        let x_lower = ((x as usize / sf) as u32).min(map_w - 1);
+        let x_upper = (x_lower + 1).min(map_w - 1);
+        let y_lower = ((y as usize / sf) as u32).min(map_h - 1);
+        let y_upper = (y_lower + 1).min(map_h - 1);
+
+        let idx = |px: u32, py: u32| (px + py * map_w) as usize * 3;
+        let i1 = idx(x_lower, y_lower);
+        let i2 = idx(x_lower, y_upper);
+        let i3 = idx(x_upper, y_lower);
+        let i4 = idx(x_upper, y_upper);
+
+        let offset_x = x as usize % sf;
+        let offset_y = y as usize % sf;
+
+        let w = if x_lower == x_upper && y_lower == y_upper {
+            &self.weights_c
+        } else if x_lower == x_upper {
+            &self.weights_nr
+        } else if y_lower == y_upper {
+            &self.weights_nb
+        } else {
+            &self.weights
+        };
+        let wi = offset_y * sf * 4 + offset_x * 4;
+
+        let tf = |v: u8| v as f32 / 255.0;
+        [
+            tf(map[i1]) * w[wi]
+                + tf(map[i2]) * w[wi + 1]
+                + tf(map[i3]) * w[wi + 2]
+                + tf(map[i4]) * w[wi + 3],
+            tf(map[i1 + 1]) * w[wi]
+                + tf(map[i2 + 1]) * w[wi + 1]
+                + tf(map[i3 + 1]) * w[wi + 2]
+                + tf(map[i4 + 1]) * w[wi + 3],
+            tf(map[i1 + 2]) * w[wi]
+                + tf(map[i2 + 2]) * w[wi + 1]
+                + tf(map[i3 + 2]) * w[wi + 2]
+                + tf(map[i4 + 2]) * w[wi + 3],
+        ]
+    }
+}
+
 /// Bilinear interpolation for gain map upsampling using Shepard's inverse distance weighting.
 ///
 /// Port of `sampleMap(map, float map_scale_factor, x, y)` from gainmapmath.cpp.

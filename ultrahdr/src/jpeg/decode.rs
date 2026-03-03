@@ -1,5 +1,3 @@
-use jpeg_decoder::Decoder;
-
 use crate::error::{Error, Result};
 
 pub struct JpegDecoded {
@@ -9,8 +7,34 @@ pub struct JpegDecoded {
     pub icc_profile: Option<Vec<u8>>,
 }
 
+#[cfg(not(feature = "zune-jpeg"))]
 pub fn decode_jpeg(data: &[u8]) -> Result<JpegDecoded> {
+    use jpeg_decoder::Decoder;
+
     let mut decoder = Decoder::new(data);
+    let pixels = decoder
+        .decode()
+        .map_err(|e| Error::JpegError(e.to_string()))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| Error::JpegError("no image info after decoding".into()))?;
+
+    let icc_profile = decoder.icc_profile();
+
+    Ok(JpegDecoded {
+        pixels,
+        width: info.width as u32,
+        height: info.height as u32,
+        icc_profile,
+    })
+}
+
+#[cfg(feature = "zune-jpeg")]
+pub fn decode_jpeg(data: &[u8]) -> Result<JpegDecoded> {
+    use zune_core::bytestream::ZCursor;
+    use zune_jpeg::JpegDecoder;
+
+    let mut decoder = JpegDecoder::new(ZCursor::new(data));
     let pixels = decoder
         .decode()
         .map_err(|e| Error::JpegError(e.to_string()))?;
