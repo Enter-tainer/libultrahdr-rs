@@ -5,6 +5,7 @@
 //! - Gain map metadata (ISO 21496-1) reading and writing
 
 pub mod color;
+pub mod decoder;
 pub mod error;
 pub mod gainmap;
 pub mod jpeg;
