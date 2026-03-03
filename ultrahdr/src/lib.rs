@@ -6,6 +6,7 @@
 
 pub mod color;
 pub mod decoder;
+pub mod encoder;
 pub mod error;
 pub mod gainmap;
 pub mod jpeg;
