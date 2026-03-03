@@ -54,22 +54,38 @@ pub fn affine_map_gain(gainlog2: f32, mingainlog2: f32, maxgainlog2: f32, gamma:
 
 /// Apply a single-channel gain map value to reconstruct HDR color from SDR.
 ///
-/// Port of `applyGain(Color, float, metadata)` from gainmapmath.cpp.
-pub fn apply_gain_single(color: Color, gain: f32, metadata: &GainMapMetadata) -> Color {
+/// Port of `applyGain(Color, float, metadata, gainmapWeight)` from gainmapmath.cpp.
+/// The `weight` parameter controls how much of the gain map to apply:
+/// weight=0 means SDR (no boost), weight=1 means full HDR.
+/// Weight is applied to the log-domain boost: `exp2(logBoost * weight)`.
+pub fn apply_gain_single(
+    color: Color,
+    gain: f32,
+    metadata: &GainMapMetadata,
+    weight: f32,
+) -> Color {
     let mut g = gain;
     if metadata.gamma[0] != 1.0 {
         g = g.powf(1.0 / metadata.gamma[0]);
     }
     let log_boost =
         metadata.min_content_boost[0].log2() * (1.0 - g) + metadata.max_content_boost[0].log2() * g;
-    let gain_factor = log_boost.exp2();
+    let gain_factor = (log_boost * weight).exp2();
     (color + metadata.offset_sdr[0]) * gain_factor - metadata.offset_hdr[0]
 }
 
 /// Apply per-channel gain map values to reconstruct HDR color from SDR.
 ///
-/// Port of `applyGain(Color, Color, metadata)` from gainmapmath.cpp.
-pub fn apply_gain_multi(color: Color, gain_rgb: [f32; 3], metadata: &GainMapMetadata) -> Color {
+/// Port of `applyGain(Color, Color, metadata, gainmapWeight)` from gainmapmath.cpp.
+/// The `weight` parameter controls how much of the gain map to apply:
+/// weight=0 means SDR (no boost), weight=1 means full HDR.
+/// Weight is applied to the log-domain boost: `exp2(logBoost * weight)`.
+pub fn apply_gain_multi(
+    color: Color,
+    gain_rgb: [f32; 3],
+    metadata: &GainMapMetadata,
+    weight: f32,
+) -> Color {
     let mut gr = gain_rgb[0];
     let mut gg = gain_rgb[1];
     let mut gb = gain_rgb[2];
@@ -91,9 +107,9 @@ pub fn apply_gain_multi(color: Color, gain_rgb: [f32; 3], metadata: &GainMapMeta
         + metadata.max_content_boost[2].log2() * gb;
 
     Color::new(
-        (color.r + metadata.offset_sdr[0]) * log_r.exp2() - metadata.offset_hdr[0],
-        (color.g + metadata.offset_sdr[1]) * log_g.exp2() - metadata.offset_hdr[1],
-        (color.b + metadata.offset_sdr[2]) * log_b.exp2() - metadata.offset_hdr[2],
+        (color.r + metadata.offset_sdr[0]) * (log_r * weight).exp2() - metadata.offset_hdr[0],
+        (color.g + metadata.offset_sdr[1]) * (log_g * weight).exp2() - metadata.offset_hdr[1],
+        (color.b + metadata.offset_sdr[2]) * (log_b * weight).exp2() - metadata.offset_hdr[2],
     )
 }
 
@@ -323,7 +339,7 @@ mod tests {
         use crate::color::Color;
         let meta = default_test_metadata();
         let pixel = Color::new(0.5, 0.5, 0.5);
-        let result = apply_gain_single(pixel, 0.0, &meta);
+        let result = apply_gain_single(pixel, 0.0, &meta, 1.0);
         assert!((result.r - 0.5).abs() < 0.01);
     }
 

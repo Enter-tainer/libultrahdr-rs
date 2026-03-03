@@ -361,7 +361,8 @@ pub fn apply_gainmap_to_sdr(
             let b_lin = srgb_inv_oetf(b_u8 as f32 / 255.0);
             let sdr_color = Color::new(r_lin, g_lin, b_lin);
 
-            // Sample gain map and apply weighted gain.
+            // Sample gain map and apply gain with display boost weight.
+            // Weight is applied in log domain: exp2(logBoost * weight).
             // For RGB gain maps, sample each channel independently.
             // For grayscale gain maps, broadcast the single value.
             let hdr_color = if gainmap_is_rgb && multi_channel {
@@ -373,8 +374,7 @@ pub fn apply_gainmap_to_sdr(
                     x as u32,
                     y as u32,
                 );
-                let weighted = [gains[0] * weight, gains[1] * weight, gains[2] * weight];
-                apply_gain_multi(sdr_color, weighted, metadata)
+                apply_gain_multi(sdr_color, gains, metadata, weight)
             } else {
                 let gain = if gainmap_is_rgb {
                     // RGB gain map but identical metadata per channel: use luma of RGB
@@ -397,11 +397,10 @@ pub fn apply_gainmap_to_sdr(
                         y as u32,
                     )
                 };
-                let weighted_gain = gain * weight;
                 if multi_channel {
-                    apply_gain_multi(sdr_color, [weighted_gain; 3], metadata)
+                    apply_gain_multi(sdr_color, [gain; 3], metadata, weight)
                 } else {
-                    apply_gain_single(sdr_color, weighted_gain, metadata)
+                    apply_gain_single(sdr_color, gain, metadata, weight)
                 }
             };
 
@@ -524,6 +523,24 @@ impl<'a> Decoder<'a> {
             .as_deref()
             .and_then(crate::color::icc::detect_color_gamut)
             .unwrap_or(ColorGamut::Bt709);
+
+        // For SRGB output, return the SDR base image directly without
+        // applying the gain map (matches C++ libultrahdr behavior).
+        if self.output_transfer == ColorTransfer::Srgb {
+            let sdr_rgba = rgb_to_rgba(
+                &primary.pixels,
+                primary.width as usize,
+                primary.height as usize,
+            );
+            return Ok(DecodedImage {
+                data: sdr_rgba,
+                width: primary.width,
+                height: primary.height,
+                format: PixelFormat::Rgba8888,
+                gamut,
+                transfer: ColorTransfer::Srgb,
+            });
+        }
 
         // Decode gain map JPEG
         let gm_decoded = crate::jpeg::decode::decode_jpeg(&extract.gainmap_jpeg)?;

@@ -84,6 +84,29 @@ fn rust_decode_to_rgba8888(ultrahdr_jpeg: &[u8], expected_w: u32, expected_h: u3
 // P010 HDR golden data tests (real 10-bit HDR content, 1280x720)
 // ============================================================================
 
+/// Measure PSNR of both Rust and C++ decoded outputs against a quality-100
+/// reference (minimal JPEG compression loss). This shows encode-decode
+/// pipeline quality for each implementation.
+#[test]
+fn test_psnr_vs_reference() {
+    let reference = std::fs::read(test_data_dir().join("p010_reference_rgba8888.bin"))
+        .expect("failed to read reference pixels");
+    let sys_decoded = std::fs::read(test_data_dir().join("p010_decoded_sys_rgba8888.bin"))
+        .expect("failed to read C++ decoded pixels");
+    let sys_ultrahdr = std::fs::read(test_data_dir().join("p010_ultrahdr_sys.jpg"))
+        .expect("failed to read UltraHDR JPEG");
+    let rust_decoded = rust_decode_to_rgba8888(&sys_ultrahdr, P010_WIDTH, P010_HEIGHT);
+
+    let cpp_psnr = psnr(&sys_decoded, &reference);
+    let rust_psnr = psnr(&rust_decoded, &reference);
+    let cpp_vs_rust = psnr(&sys_decoded, &rust_decoded);
+
+    eprintln!("=== PSNR vs q100 reference (P010 1280x720) ===");
+    eprintln!("  C++ decoded vs reference:  {cpp_psnr:.2} dB");
+    eprintln!("  Rust decoded vs reference: {rust_psnr:.2} dB");
+    eprintln!("  C++ vs Rust decoded:       {cpp_vs_rust:.2} dB");
+}
+
 /// Test that the Rust decoder can decode a C++-encoded UltraHDR JPEG (from real
 /// P010 HDR input) and produce output close to what the C++ decoder produced.
 #[test]
