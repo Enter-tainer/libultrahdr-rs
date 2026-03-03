@@ -401,6 +401,9 @@ pub fn write_xmp_gainmap_metadata(meta: &GainMapMetadata) -> Result<Vec<u8>> {
         meta.hdr_capacity_max.log2()
     )
     .unwrap();
+    if !meta.use_base_cg {
+        writeln!(s, "   hdrgm:BaseColorSpace=\"0\"").unwrap();
+    }
     writeln!(s, "   hdrgm:BaseRenditionIsHDR=\"False\"/>").unwrap();
     writeln!(s, " </rdf:RDF>").unwrap();
     write!(s, "</x:xmpmeta>").unwrap();
@@ -458,6 +461,13 @@ pub fn parse_xmp_gainmap_metadata(data: &[u8]) -> Result<GainMapMetadata> {
     let hdr_capacity_max = (2.0f32).powf(hdr_capacity_max_log2);
     let hdr_capacity_min = (2.0f32).powf(hdr_capacity_min_log2);
 
+    // If XMP contains BaseColorSpace="0", use_base_cg is false.
+    // If absent, default to true (base color space is used).
+    let use_base_cg = match get_attr("BaseColorSpace") {
+        Some(val) => val != "0",
+        None => true,
+    };
+
     Ok(GainMapMetadata {
         max_content_boost: [max_content_boost; 3],
         min_content_boost: [min_content_boost; 3],
@@ -466,7 +476,7 @@ pub fn parse_xmp_gainmap_metadata(data: &[u8]) -> Result<GainMapMetadata> {
         offset_hdr: [offset_hdr; 3],
         hdr_capacity_min,
         hdr_capacity_max,
-        use_base_cg: true,
+        use_base_cg,
     })
 }
 

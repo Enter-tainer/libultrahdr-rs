@@ -288,16 +288,17 @@ pub fn assemble_ultrahdr(
         out.extend_from_slice(&xmp_data);
     }
 
-    // Insert ISO 21496-1 APP2 segment
+    // Insert ISO 21496-1 APP2 stub in primary image (version only, matching C++).
+    // The full metadata payload goes into the secondary (gain map) image.
     {
-        let iso_payload_len = ISO_GAINMAP_TAG.len() + 1 + iso_data.len(); // +1 for null terminator
+        let iso_stub_payload_len = ISO_GAINMAP_TAG.len() + 1 + 4; // namespace + null + 4 version bytes
         out.push(0xFF);
         out.push(0xE2); // APP2
-        let seg_len = (iso_payload_len + 2) as u16;
+        let seg_len = (iso_stub_payload_len + 2) as u16;
         out.extend_from_slice(&seg_len.to_be_bytes());
         out.extend_from_slice(ISO_GAINMAP_TAG);
         out.push(0x00); // null terminator
-        out.extend_from_slice(&iso_data);
+        out.extend_from_slice(&[0u8; 4]); // min_version(0) + writer_version(0)
     }
 
     // Insert ICC profile APP2 segment if provided
@@ -372,11 +373,31 @@ pub fn assemble_ultrahdr(
     let mpf_tiff_header_pos = (mpf_data_start + 4) as u32;
     let secondary_offset = primary_size - mpf_tiff_header_pos;
 
-    let mpf = generate_mpf(primary_size, 0, gainmap_jpeg.len() as u32, secondary_offset);
+    // Build the secondary image (gain map JPEG with ISO metadata inserted after SOI).
+    let iso_secondary_seg_len = 2 + ISO_GAINMAP_TAG.len() + 1 + iso_data.len(); // APP2 length field + namespace + null + payload
+    let secondary_total_size = gainmap_jpeg.len() + 2 + iso_secondary_seg_len; // +2 for FF E2 marker bytes
+    let mpf = generate_mpf(
+        primary_size,
+        0,
+        secondary_total_size as u32,
+        secondary_offset,
+    );
     out[mpf_data_start..mpf_data_start + mpf_data_size].copy_from_slice(&mpf);
 
-    // Append the gain map JPEG
-    out.extend_from_slice(gainmap_jpeg);
+    // Append secondary image: SOI + ISO APP2 + rest of gain map JPEG
+    out.extend_from_slice(&gainmap_jpeg[..2]); // SOI (FF D8)
+    // Insert ISO 21496-1 APP2 with full metadata into secondary image
+    {
+        let iso_payload_len = ISO_GAINMAP_TAG.len() + 1 + iso_data.len();
+        out.push(0xFF);
+        out.push(0xE2); // APP2
+        let seg_len = (iso_payload_len + 2) as u16;
+        out.extend_from_slice(&seg_len.to_be_bytes());
+        out.extend_from_slice(ISO_GAINMAP_TAG);
+        out.push(0x00); // null terminator
+        out.extend_from_slice(&iso_data);
+    }
+    out.extend_from_slice(&gainmap_jpeg[2..]); // rest of gain map after SOI
 
     Ok(out)
 }
