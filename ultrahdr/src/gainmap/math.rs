@@ -21,6 +21,8 @@ pub fn compute_gain(sdr: f32, hdr: f32) -> f32 {
 /// Encode the gain ratio between SDR and HDR luminance into a quantized u8 value.
 ///
 /// Port of `encodeGain()` from gainmapmath.cpp.
+/// Currently unused — kept for API completeness with libultrahdr.
+#[allow(dead_code)]
 pub fn encode_gain(y_sdr: f32, y_hdr: f32, metadata: &GainMapMetadata, channel: usize) -> u8 {
     let mut gain = if y_sdr > 0.0 { y_hdr / y_sdr } else { 1.0 };
 
@@ -39,6 +41,8 @@ pub fn encode_gain(y_sdr: f32, y_hdr: f32, metadata: &GainMapMetadata, channel: 
 /// Affine-map a log2 gain value into a quantized u8 with optional gamma.
 ///
 /// Port of `affineMapGain()` from gainmapmath.cpp.
+/// Currently unused — kept for API completeness with libultrahdr.
+#[allow(dead_code)]
 pub fn affine_map_gain(gainlog2: f32, mingainlog2: f32, maxgainlog2: f32, gamma: f32) -> u8 {
     let mut mapped = (gainlog2 - mingainlog2) / (maxgainlog2 - mingainlog2);
     if gamma != 1.0 {
