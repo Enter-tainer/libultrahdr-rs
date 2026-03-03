@@ -89,7 +89,8 @@ pub fn gamut_convert(c: Color, from: ColorGamut, to: ColorGamut) -> Color {
         (ColorGamut::DisplayP3, ColorGamut::Bt2100) => apply_matrix(c, &P3_TO_BT2100),
         (ColorGamut::Bt2100, ColorGamut::Bt709) => apply_matrix(c, &BT2100_TO_BT709),
         (ColorGamut::Bt2100, ColorGamut::DisplayP3) => apply_matrix(c, &BT2100_TO_P3),
-        _ => c,
+        // All cross-gamut pairs covered; same-gamut case handled by early return above.
+        (_, _) => unreachable!(),
     }
 }
 
