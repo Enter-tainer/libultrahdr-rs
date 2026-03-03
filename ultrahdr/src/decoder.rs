@@ -360,7 +360,8 @@ pub fn apply_gainmap_to_sdr(
     const PQ_SCALE: f32 = SDR_WHITE_NITS / PQ_MAX_NITS;
     const HLG_SCALE: f32 = SDR_WHITE_NITS / HLG_MAX_NITS;
 
-    for y in 0..sdr_height {
+    // Process a single row of pixels. All read-only data is shared by reference.
+    let process_row = |y: usize, row_out: &mut [u8]| {
         for x in 0..sdr_width {
             let px_idx = (y * sdr_width + x) * 4;
             let r_u8 = sdr_pixels[px_idx];
@@ -444,13 +445,13 @@ pub fn apply_gainmap_to_sdr(
             };
 
             // Write output pixel
-            let out_idx = (y * sdr_width + x) * bpp;
+            let out_idx = x * bpp;
             match output_format {
                 PixelFormat::Rgba8888 => {
-                    output[out_idx] = (r_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                    output[out_idx + 1] = (g_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                    output[out_idx + 2] = (b_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                    output[out_idx + 3] = a_u8;
+                    row_out[out_idx] = (r_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    row_out[out_idx + 1] = (g_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    row_out[out_idx + 2] = (b_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    row_out[out_idx + 3] = a_u8;
                 }
                 PixelFormat::Rgba1010102 => {
                     let r10 = (r_out.clamp(0.0, 1.0) * 1023.0 + 0.5) as u32;
@@ -458,19 +459,40 @@ pub fn apply_gainmap_to_sdr(
                     let b10 = (b_out.clamp(0.0, 1.0) * 1023.0 + 0.5) as u32;
                     let a2 = ((a_u8 as u32) >> 6) & 0x3;
                     let packed = r10 | (g10 << 10) | (b10 << 20) | (a2 << 30);
-                    output[out_idx..out_idx + 4].copy_from_slice(&packed.to_le_bytes());
+                    row_out[out_idx..out_idx + 4].copy_from_slice(&packed.to_le_bytes());
                 }
                 PixelFormat::RgbaF16 => {
                     let r_h = f32_to_f16(r_out);
                     let g_h = f32_to_f16(g_out);
                     let b_h = f32_to_f16(b_out);
                     let a_h = f32_to_f16(a_u8 as f32 / 255.0);
-                    output[out_idx..out_idx + 2].copy_from_slice(&r_h.to_le_bytes());
-                    output[out_idx + 2..out_idx + 4].copy_from_slice(&g_h.to_le_bytes());
-                    output[out_idx + 4..out_idx + 6].copy_from_slice(&b_h.to_le_bytes());
-                    output[out_idx + 6..out_idx + 8].copy_from_slice(&a_h.to_le_bytes());
+                    row_out[out_idx..out_idx + 2].copy_from_slice(&r_h.to_le_bytes());
+                    row_out[out_idx + 2..out_idx + 4].copy_from_slice(&g_h.to_le_bytes());
+                    row_out[out_idx + 4..out_idx + 6].copy_from_slice(&b_h.to_le_bytes());
+                    row_out[out_idx + 6..out_idx + 8].copy_from_slice(&a_h.to_le_bytes());
                 }
             }
+        }
+    };
+
+    let row_bytes = sdr_width * bpp;
+
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        output
+            .par_chunks_mut(row_bytes)
+            .enumerate()
+            .for_each(|(y, row_out)| {
+                process_row(y, row_out);
+            });
+    }
+
+    #[cfg(not(feature = "rayon"))]
+    {
+        for y in 0..sdr_height {
+            let start = y * row_bytes;
+            process_row(y, &mut output[start..start + row_bytes]);
         }
     }
 
