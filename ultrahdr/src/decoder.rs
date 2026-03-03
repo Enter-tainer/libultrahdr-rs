@@ -5,9 +5,7 @@ use crate::color::transfer::{
     hlg_inv_ootf_approx_lut, hlg_oetf_lut, pq_oetf_lut, srgb_inv_oetf_lut, srgb_oetf,
 };
 use crate::error::{Error, Result};
-use crate::gainmap::math::{
-    sample_map_bilinear, sample_map_bilinear_rgb, GainLut,
-};
+use crate::gainmap::math::{GainLut, sample_map_bilinear, sample_map_bilinear_rgb};
 use crate::gainmap::metadata::{
     decode_gainmap_metadata, fraction_to_float, parse_xmp_gainmap_metadata,
 };
