@@ -5,6 +5,88 @@ use crate::types::GainMapMetadata;
 const HDR_OFFSET: f32 = 1e-7;
 const SDR_OFFSET: f32 = 1e-7;
 
+// ---------------------------------------------------------------------------
+// GainLut — pre-computed gain factor table
+// ---------------------------------------------------------------------------
+
+const GAIN_LUT_SIZE: usize = 1024;
+
+/// Pre-computed gain factor LUT that replaces per-pixel log2/exp2/powf
+/// in `apply_gain_single` / `apply_gain_multi`.
+pub struct GainLut {
+    /// Per-channel gain factor tables (1024 entries each).
+    tables: [[f32; GAIN_LUT_SIZE]; 3],
+    /// Per-channel 1/gamma (cached for the gamma de-quantization step).
+    gamma_inv: [f32; 3],
+    /// Per-channel offset_sdr from metadata.
+    offset_sdr: [f32; 3],
+    /// Per-channel offset_hdr from metadata.
+    offset_hdr: [f32; 3],
+}
+
+impl GainLut {
+    /// Build a gain factor LUT from gain map metadata and a display boost weight.
+    pub fn new(metadata: &GainMapMetadata, weight: f32) -> Self {
+        let mut tables = [[0.0f32; GAIN_LUT_SIZE]; 3];
+        let mut gamma_inv = [1.0f32; 3];
+
+        for ch in 0..3 {
+            let log2_min = metadata.min_content_boost[ch].log2();
+            let log2_max = metadata.max_content_boost[ch].log2();
+            gamma_inv[ch] = if metadata.gamma[ch] != 1.0 {
+                1.0 / metadata.gamma[ch]
+            } else {
+                1.0
+            };
+
+            for idx in 0..GAIN_LUT_SIZE {
+                let g = idx as f32 / (GAIN_LUT_SIZE - 1) as f32;
+                let log_boost = log2_min * (1.0 - g) + log2_max * g;
+                tables[ch][idx] = (log_boost * weight).exp2();
+            }
+        }
+
+        Self {
+            tables,
+            gamma_inv,
+            offset_sdr: metadata.offset_sdr,
+            offset_hdr: metadata.offset_hdr,
+        }
+    }
+
+    /// Look up the pre-computed gain factor for a given gain value and channel.
+    #[inline(always)]
+    fn gain_factor(&self, gain: f32, channel: usize) -> f32 {
+        let g = if self.gamma_inv[channel] != 1.0 {
+            gain.powf(self.gamma_inv[channel])
+        } else {
+            gain
+        };
+        let idx = (g * (GAIN_LUT_SIZE - 1) as f32 + 0.5) as usize;
+        self.tables[channel][idx.min(GAIN_LUT_SIZE - 1)]
+    }
+
+    /// Apply a single-channel gain via LUT lookup.
+    #[inline(always)]
+    pub fn apply_single(&self, color: Color, gain: f32) -> Color {
+        let factor = self.gain_factor(gain, 0);
+        (color + self.offset_sdr[0]) * factor - self.offset_hdr[0]
+    }
+
+    /// Apply per-channel gain via LUT lookup.
+    #[inline(always)]
+    pub fn apply_multi(&self, color: Color, gains: [f32; 3]) -> Color {
+        let fr = self.gain_factor(gains[0], 0);
+        let fg = self.gain_factor(gains[1], 1);
+        let fb = self.gain_factor(gains[2], 2);
+        Color::new(
+            (color.r + self.offset_sdr[0]) * fr - self.offset_hdr[0],
+            (color.g + self.offset_sdr[1]) * fg - self.offset_hdr[1],
+            (color.b + self.offset_sdr[2]) * fb - self.offset_hdr[2],
+        )
+    }
+}
+
 /// Compute the log2 gain ratio between HDR and SDR luminance values.
 ///
 /// Port of `computeGain()` from gainmapmath.cpp.

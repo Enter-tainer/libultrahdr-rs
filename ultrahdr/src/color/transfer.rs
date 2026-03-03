@@ -78,7 +78,85 @@ pub fn srgb_oetf(e: f32) -> f32 {
     }
 }
 
+use std::sync::LazyLock;
+
 use crate::types::{ColorTransfer, HLG_MAX_NITS, PQ_MAX_NITS, SDR_WHITE_NITS};
+
+// ---------------------------------------------------------------------------
+// LUT-based fast approximations
+// ---------------------------------------------------------------------------
+
+const LUT_SIZE: usize = 65536;
+
+/// 256-entry LUT for sRGB inverse OETF: input u8 → linear f32.
+static SRGB_INV_OETF_LUT: LazyLock<[f32; 256]> = LazyLock::new(|| {
+    let mut lut = [0.0f32; 256];
+    for i in 0..256 {
+        lut[i] = srgb_inv_oetf(i as f32 / 255.0);
+    }
+    lut
+});
+
+/// Fast sRGB inverse OETF via 256-entry lookup (exact for u8 inputs).
+#[inline(always)]
+pub fn srgb_inv_oetf_lut(u8_val: u8) -> f32 {
+    SRGB_INV_OETF_LUT[u8_val as usize]
+}
+
+/// 65536-entry LUT for PQ OETF: input linear [0,1] → encoded [0,1].
+static PQ_OETF_LUT: LazyLock<Vec<f32>> = LazyLock::new(|| {
+    (0..LUT_SIZE)
+        .map(|i| pq_oetf(i as f32 / (LUT_SIZE - 1) as f32))
+        .collect()
+});
+
+/// Fast PQ OETF via 65536-entry lookup.
+#[inline(always)]
+pub fn pq_oetf_lut(e: f32) -> f32 {
+    if e <= 0.0 {
+        return 0.0;
+    }
+    let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
+    PQ_OETF_LUT[idx.min(LUT_SIZE - 1)]
+}
+
+/// 65536-entry LUT for HLG OETF: input linear [0,1] → encoded [0,1].
+static HLG_OETF_LUT: LazyLock<Vec<f32>> = LazyLock::new(|| {
+    (0..LUT_SIZE)
+        .map(|i| hlg_oetf(i as f32 / (LUT_SIZE - 1) as f32))
+        .collect()
+});
+
+/// Fast HLG OETF via 65536-entry lookup.
+#[inline(always)]
+pub fn hlg_oetf_lut(e: f32) -> f32 {
+    if e <= 0.0 {
+        return 0.0;
+    }
+    let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
+    HLG_OETF_LUT[idx.min(LUT_SIZE - 1)]
+}
+
+/// 65536-entry LUT for HLG inverse OOTF approx: pow(x, 1/1.2) for x in [0,1].
+static HLG_INV_OOTF_LUT: LazyLock<Vec<f32>> = LazyLock::new(|| {
+    let inv_gamma = 1.0f32 / 1.2;
+    (0..LUT_SIZE)
+        .map(|i| {
+            let x = i as f32 / (LUT_SIZE - 1) as f32;
+            x.powf(inv_gamma)
+        })
+        .collect()
+});
+
+/// Fast HLG inverse OOTF approx (pow(x, 1/1.2)) via 65536-entry lookup.
+#[inline(always)]
+pub fn hlg_inv_ootf_approx_lut(e: f32) -> f32 {
+    if e <= 0.0 {
+        return 0.0;
+    }
+    let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
+    HLG_INV_OOTF_LUT[idx.min(LUT_SIZE - 1)]
+}
 
 /// Reference display peak brightness in nits for a given transfer function.
 pub fn reference_display_peak_nits(transfer: ColorTransfer) -> f32 {

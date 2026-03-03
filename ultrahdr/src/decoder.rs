@@ -1,10 +1,12 @@
 //! UltraHDR JPEG decoder: extract gain map, apply it, and produce HDR output.
 
 use crate::color::Color;
-use crate::color::transfer::{hlg_oetf, pq_oetf, srgb_inv_oetf, srgb_oetf};
+use crate::color::transfer::{
+    hlg_inv_ootf_approx_lut, hlg_oetf_lut, pq_oetf_lut, srgb_inv_oetf_lut, srgb_oetf,
+};
 use crate::error::{Error, Result};
 use crate::gainmap::math::{
-    apply_gain_multi, apply_gain_single, sample_map_bilinear, sample_map_bilinear_rgb,
+    sample_map_bilinear, sample_map_bilinear_rgb, GainLut,
 };
 use crate::gainmap::metadata::{
     decode_gainmap_metadata, fraction_to_float, parse_xmp_gainmap_metadata,
@@ -347,6 +349,17 @@ pub fn apply_gainmap_to_sdr(
     let bpp = output_format.bytes_per_pixel();
     let mut output = vec![0u8; sdr_width * sdr_height * bpp];
 
+    // Pre-compute gain factor LUT (replaces per-pixel log2/exp2/powf).
+    let gain_lut = GainLut::new(metadata, weight);
+
+    // Constants from C++ libultrahdr (gainmapmath.h):
+    const SDR_WHITE_NITS: f32 = 203.0;
+    const HLG_MAX_NITS: f32 = 1000.0;
+    const PQ_MAX_NITS: f32 = 10000.0;
+    const MAX_LINEAR: f32 = PQ_MAX_NITS / SDR_WHITE_NITS; // ~49.26
+    const PQ_SCALE: f32 = SDR_WHITE_NITS / PQ_MAX_NITS;
+    const HLG_SCALE: f32 = SDR_WHITE_NITS / HLG_MAX_NITS;
+
     for y in 0..sdr_height {
         for x in 0..sdr_width {
             let px_idx = (y * sdr_width + x) * 4;
@@ -355,16 +368,13 @@ pub fn apply_gainmap_to_sdr(
             let b_u8 = sdr_pixels[px_idx + 2];
             let a_u8 = sdr_pixels[px_idx + 3];
 
-            // Convert SDR to linear
-            let r_lin = srgb_inv_oetf(r_u8 as f32 / 255.0);
-            let g_lin = srgb_inv_oetf(g_u8 as f32 / 255.0);
-            let b_lin = srgb_inv_oetf(b_u8 as f32 / 255.0);
+            // Convert SDR to linear (LUT: exact for u8 inputs)
+            let r_lin = srgb_inv_oetf_lut(r_u8);
+            let g_lin = srgb_inv_oetf_lut(g_u8);
+            let b_lin = srgb_inv_oetf_lut(b_u8);
             let sdr_color = Color::new(r_lin, g_lin, b_lin);
 
-            // Sample gain map and apply gain with display boost weight.
-            // Weight is applied in log domain: exp2(logBoost * weight).
-            // For RGB gain maps, sample each channel independently.
-            // For grayscale gain maps, broadcast the single value.
+            // Sample gain map and apply gain via LUT.
             let hdr_color = if gainmap_is_rgb && multi_channel {
                 let gains = sample_map_bilinear_rgb(
                     gainmap,
@@ -374,10 +384,9 @@ pub fn apply_gainmap_to_sdr(
                     x as u32,
                     y as u32,
                 );
-                apply_gain_multi(sdr_color, gains, metadata, weight)
+                gain_lut.apply_multi(sdr_color, gains)
             } else {
                 let gain = if gainmap_is_rgb {
-                    // RGB gain map but identical metadata per channel: use luma of RGB
                     let gains = sample_map_bilinear_rgb(
                         gainmap,
                         map_width as u32,
@@ -398,54 +407,38 @@ pub fn apply_gainmap_to_sdr(
                     )
                 };
                 if multi_channel {
-                    apply_gain_multi(sdr_color, [gain; 3], metadata, weight)
+                    gain_lut.apply_multi(sdr_color, [gain; 3])
                 } else {
-                    apply_gain_single(sdr_color, gain, metadata, weight)
+                    gain_lut.apply_single(sdr_color, gain)
                 }
             };
 
-            // Apply output transfer function.
-            // Constants from C++ libultrahdr (gainmapmath.h):
-            const SDR_WHITE_NITS: f32 = 203.0;
-            const HLG_MAX_NITS: f32 = 1000.0;
-            const PQ_MAX_NITS: f32 = 10000.0;
-            const MAX_LINEAR: f32 = PQ_MAX_NITS / SDR_WHITE_NITS; // ~49.26
-
+            // Apply output transfer function (LUT for PQ/HLG).
             let (r_out, g_out, b_out) = match output_transfer {
-                ColorTransfer::Linear => {
-                    // C++: clampPixelFloatLinear — clamp to [0, 10000/203]
-                    (
-                        hdr_color.r.clamp(0.0, MAX_LINEAR),
-                        hdr_color.g.clamp(0.0, MAX_LINEAR),
-                        hdr_color.b.clamp(0.0, MAX_LINEAR),
-                    )
-                }
+                ColorTransfer::Linear => (
+                    hdr_color.r.clamp(0.0, MAX_LINEAR),
+                    hdr_color.g.clamp(0.0, MAX_LINEAR),
+                    hdr_color.b.clamp(0.0, MAX_LINEAR),
+                ),
                 ColorTransfer::Srgb => (
                     srgb_oetf(hdr_color.r.max(0.0)),
                     srgb_oetf(hdr_color.g.max(0.0)),
                     srgb_oetf(hdr_color.b.max(0.0)),
                 ),
                 ColorTransfer::Pq => {
-                    // C++: scale by kSdrWhiteNits/kPqMaxNits, clamp [0,1], then pqOetf
-                    let scale = SDR_WHITE_NITS / PQ_MAX_NITS;
-                    let r = (hdr_color.r * scale).clamp(0.0, 1.0);
-                    let g = (hdr_color.g * scale).clamp(0.0, 1.0);
-                    let b = (hdr_color.b * scale).clamp(0.0, 1.0);
-                    (pq_oetf(r), pq_oetf(g), pq_oetf(b))
+                    let r = (hdr_color.r * PQ_SCALE).clamp(0.0, 1.0);
+                    let g = (hdr_color.g * PQ_SCALE).clamp(0.0, 1.0);
+                    let b = (hdr_color.b * PQ_SCALE).clamp(0.0, 1.0);
+                    (pq_oetf_lut(r), pq_oetf_lut(g), pq_oetf_lut(b))
                 }
                 ColorTransfer::Hlg => {
-                    // C++: scale by kSdrWhiteNits/kHlgMaxNits, clamp [0,1],
-                    // hlgInverseOotfApprox (pow(x, 1/1.2)), then hlgOetf
-                    let scale = SDR_WHITE_NITS / HLG_MAX_NITS;
-                    let r = (hdr_color.r * scale).clamp(0.0, 1.0);
-                    let g = (hdr_color.g * scale).clamp(0.0, 1.0);
-                    let b = (hdr_color.b * scale).clamp(0.0, 1.0);
-                    // hlgInverseOotfApprox: pow(x, 1/kOotfGamma) where kOotfGamma = 1.2
-                    let inv_gamma = 1.0_f32 / 1.2;
+                    let r = (hdr_color.r * HLG_SCALE).clamp(0.0, 1.0);
+                    let g = (hdr_color.g * HLG_SCALE).clamp(0.0, 1.0);
+                    let b = (hdr_color.b * HLG_SCALE).clamp(0.0, 1.0);
                     (
-                        hlg_oetf(r.powf(inv_gamma)),
-                        hlg_oetf(g.powf(inv_gamma)),
-                        hlg_oetf(b.powf(inv_gamma)),
+                        hlg_oetf_lut(hlg_inv_ootf_approx_lut(r)),
+                        hlg_oetf_lut(hlg_inv_ootf_approx_lut(g)),
+                        hlg_oetf_lut(hlg_inv_ootf_approx_lut(b)),
                     )
                 }
             };
