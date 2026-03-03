@@ -341,7 +341,13 @@ pub fn apply_gainmap_to_sdr(
             // Apply weighted gain (interpolate between no-boost and full-boost)
             let weighted_gain = gain * weight;
 
-            // Apply gain to reconstruct HDR
+            // Apply gain to reconstruct HDR.
+            // NOTE: When multi_channel is true (metadata has per-channel boost values),
+            // we still use a single sampled gain value broadcast to all 3 channels.
+            // This is correct for single-channel (grayscale) gain maps, which is the
+            // default encoding mode. True per-channel gain map sampling (where the gain
+            // map JPEG is RGB and each channel is sampled independently) is not yet
+            // implemented — the current encoder defaults to multichannel=false.
             let hdr_color = if multi_channel {
                 apply_gain_multi(sdr_color, [weighted_gain; 3], metadata)
             } else {
