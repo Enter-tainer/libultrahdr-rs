@@ -83,165 +83,171 @@ fn rust_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
 // ---------- C++ encoder via FFI ----------
 
 unsafe fn cpp_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
-    let enc = uhdr_create_encoder();
-    assert!(!enc.is_null(), "uhdr_create_encoder returned null");
+    unsafe {
+        let enc = uhdr_create_encoder();
+        assert!(!enc.is_null(), "uhdr_create_encoder returned null");
 
-    // Set HDR raw image (RGBA1010102, HLG, BT.2100)
-    let mut hdr_img = uhdr_raw_image {
-        fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
-        cg: uhdr_color_gamut::UHDR_CG_BT_2100,
-        ct: uhdr_color_transfer::UHDR_CT_HLG,
-        range: uhdr_color_range::UHDR_CR_FULL_RANGE,
-        w: W,
-        h: H,
-        planes: [
-            hdr.as_ptr() as *mut _,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        ],
-        stride: [W, 0, 0],
-    };
-    let err = uhdr_enc_set_raw_image(enc, &mut hdr_img, uhdr_img_label::UHDR_HDR_IMG);
-    assert_eq!(
-        err.error_code,
-        uhdr_codec_err::UHDR_CODEC_OK,
-        "set HDR raw failed for {label}"
-    );
-
-    // Set SDR raw image (RGBA8888, sRGB, BT.709)
-    let mut sdr_img = uhdr_raw_image {
-        fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
-        cg: uhdr_color_gamut::UHDR_CG_BT_709,
-        ct: uhdr_color_transfer::UHDR_CT_SRGB,
-        range: uhdr_color_range::UHDR_CR_FULL_RANGE,
-        w: W,
-        h: H,
-        planes: [
-            sdr.as_ptr() as *mut _,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        ],
-        stride: [W, 0, 0],
-    };
-    let err = uhdr_enc_set_raw_image(enc, &mut sdr_img, uhdr_img_label::UHDR_SDR_IMG);
-    assert_eq!(
-        err.error_code,
-        uhdr_codec_err::UHDR_CODEC_OK,
-        "set SDR raw failed for {label}"
-    );
-
-    // Quality
-    let err = uhdr_enc_set_quality(enc, 95, uhdr_img_label::UHDR_BASE_IMG);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-    let err = uhdr_enc_set_quality(enc, 85, uhdr_img_label::UHDR_GAIN_MAP_IMG);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-
-    // Gainmap settings
-    let err = uhdr_enc_set_using_multi_channel_gainmap(enc, 0); // single channel
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-    let err = uhdr_enc_set_gainmap_scale_factor(enc, 4);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-    let err = uhdr_enc_set_target_display_peak_brightness(enc, 1600.0);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-
-    // Encode
-    let err = uhdr_encode(enc);
-    if err.error_code != uhdr_codec_err::UHDR_CODEC_OK {
-        let detail = if err.has_detail != 0 {
-            std::ffi::CStr::from_ptr(err.detail.as_ptr())
-                .to_string_lossy()
-                .to_string()
-        } else {
-            "no detail".to_string()
+        // Set HDR raw image (RGBA1010102, HLG, BT.2100)
+        let mut hdr_img = uhdr_raw_image {
+            fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
+            cg: uhdr_color_gamut::UHDR_CG_BT_2100,
+            ct: uhdr_color_transfer::UHDR_CT_HLG,
+            range: uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w: W,
+            h: H,
+            planes: [
+                hdr.as_ptr() as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
+            stride: [W, 0, 0],
         };
-        panic!(
-            "C++ encode failed for {label}: {:?} - {detail}",
-            err.error_code
+        let err = uhdr_enc_set_raw_image(enc, &mut hdr_img, uhdr_img_label::UHDR_HDR_IMG);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "set HDR raw failed for {label}"
         );
+
+        // Set SDR raw image (RGBA8888, sRGB, BT.709)
+        let mut sdr_img = uhdr_raw_image {
+            fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
+            cg: uhdr_color_gamut::UHDR_CG_BT_709,
+            ct: uhdr_color_transfer::UHDR_CT_SRGB,
+            range: uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w: W,
+            h: H,
+            planes: [
+                sdr.as_ptr() as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
+            stride: [W, 0, 0],
+        };
+        let err = uhdr_enc_set_raw_image(enc, &mut sdr_img, uhdr_img_label::UHDR_SDR_IMG);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "set SDR raw failed for {label}"
+        );
+
+        // Quality
+        let err = uhdr_enc_set_quality(enc, 95, uhdr_img_label::UHDR_BASE_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_quality(enc, 85, uhdr_img_label::UHDR_GAIN_MAP_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        // Gainmap settings
+        let err = uhdr_enc_set_using_multi_channel_gainmap(enc, 0); // single channel
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_gainmap_scale_factor(enc, 4);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_target_display_peak_brightness(enc, 1600.0);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        // Encode
+        let err = uhdr_encode(enc);
+        if err.error_code != uhdr_codec_err::UHDR_CODEC_OK {
+            let detail = if err.has_detail != 0 {
+                std::ffi::CStr::from_ptr(err.detail.as_ptr())
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                "no detail".to_string()
+            };
+            panic!(
+                "C++ encode failed for {label}: {:?} - {detail}",
+                err.error_code
+            );
+        }
+
+        // Get result
+        let stream = uhdr_get_encoded_stream(enc);
+        assert!(!stream.is_null(), "get_encoded_stream returned null");
+        let data = std::slice::from_raw_parts((*stream).data as *const u8, (*stream).data_sz);
+        let result = data.to_vec();
+
+        uhdr_release_encoder(enc);
+        result
     }
-
-    // Get result
-    let stream = uhdr_get_encoded_stream(enc);
-    assert!(!stream.is_null(), "get_encoded_stream returned null");
-    let data = std::slice::from_raw_parts((*stream).data as *const u8, (*stream).data_sz);
-    let result = data.to_vec();
-
-    uhdr_release_encoder(enc);
-    result
 }
 
 // ---------- C++ decoder: probe metadata ----------
 
 unsafe fn cpp_probe_metadata(jpeg: &[u8]) -> uhdr_gainmap_metadata {
-    let dec = uhdr_create_decoder();
-    assert!(!dec.is_null());
+    unsafe {
+        let dec = uhdr_create_decoder();
+        assert!(!dec.is_null());
 
-    let mut img = uhdr_compressed_image {
-        data: jpeg.as_ptr() as *mut _,
-        data_sz: jpeg.len(),
-        capacity: jpeg.len(),
-        cg: uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
-        ct: uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
-        range: uhdr_color_range::UHDR_CR_UNSPECIFIED,
-    };
-    let err = uhdr_dec_set_image(dec, &mut img);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let mut img = uhdr_compressed_image {
+            data: jpeg.as_ptr() as *mut _,
+            data_sz: jpeg.len(),
+            capacity: jpeg.len(),
+            cg: uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
+            ct: uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
+            range: uhdr_color_range::UHDR_CR_UNSPECIFIED,
+        };
+        let err = uhdr_dec_set_image(dec, &mut img);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
 
-    let err = uhdr_dec_probe(dec);
-    assert_eq!(
-        err.error_code,
-        uhdr_codec_err::UHDR_CODEC_OK,
-        "probe failed"
-    );
+        let err = uhdr_dec_probe(dec);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "probe failed"
+        );
 
-    let meta_ptr = uhdr_dec_get_gainmap_metadata(dec);
-    assert!(!meta_ptr.is_null(), "get_gainmap_metadata returned null");
-    let meta = *meta_ptr;
+        let meta_ptr = uhdr_dec_get_gainmap_metadata(dec);
+        assert!(!meta_ptr.is_null(), "get_gainmap_metadata returned null");
+        let meta = *meta_ptr;
 
-    uhdr_release_decoder(dec);
-    meta
+        uhdr_release_decoder(dec);
+        meta
+    }
 }
 
 // ---------- C++ decoder: decode to 1010102 HLG ----------
 
 unsafe fn cpp_decode_to_1010102(jpeg: &[u8]) -> Vec<u8> {
-    let dec = uhdr_create_decoder();
-    assert!(!dec.is_null());
+    unsafe {
+        let dec = uhdr_create_decoder();
+        assert!(!dec.is_null());
 
-    let mut img = uhdr_compressed_image {
-        data: jpeg.as_ptr() as *mut _,
-        data_sz: jpeg.len(),
-        capacity: jpeg.len(),
-        cg: uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
-        ct: uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
-        range: uhdr_color_range::UHDR_CR_UNSPECIFIED,
-    };
-    let err = uhdr_dec_set_image(dec, &mut img);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let mut img = uhdr_compressed_image {
+            data: jpeg.as_ptr() as *mut _,
+            data_sz: jpeg.len(),
+            capacity: jpeg.len(),
+            cg: uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
+            ct: uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
+            range: uhdr_color_range::UHDR_CR_UNSPECIFIED,
+        };
+        let err = uhdr_dec_set_image(dec, &mut img);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
 
-    let err = uhdr_dec_set_out_img_format(dec, uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-    let err = uhdr_dec_set_out_color_transfer(dec, uhdr_color_transfer::UHDR_CT_HLG);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
-    let err = uhdr_dec_set_out_max_display_boost(dec, 4.0);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_dec_set_out_img_format(dec, uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_dec_set_out_color_transfer(dec, uhdr_color_transfer::UHDR_CT_HLG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_dec_set_out_max_display_boost(dec, 4.0);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
 
-    let err = uhdr_decode(dec);
-    assert_eq!(
-        err.error_code,
-        uhdr_codec_err::UHDR_CODEC_OK,
-        "decode failed"
-    );
+        let err = uhdr_decode(dec);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "decode failed"
+        );
 
-    let raw_ptr = uhdr_get_decoded_image(dec);
-    assert!(!raw_ptr.is_null());
-    let raw = &*raw_ptr;
-    let nbytes = (raw.w * raw.h * 4) as usize;
-    let data = std::slice::from_raw_parts(raw.planes[0] as *const u8, nbytes);
-    let result = data.to_vec();
+        let raw_ptr = uhdr_get_decoded_image(dec);
+        assert!(!raw_ptr.is_null());
+        let raw = &*raw_ptr;
+        let nbytes = (raw.w * raw.h * 4) as usize;
+        let data = std::slice::from_raw_parts(raw.planes[0] as *const u8, nbytes);
+        let result = data.to_vec();
 
-    uhdr_release_decoder(dec);
-    result
+        uhdr_release_decoder(dec);
+        result
+    }
 }
 
 // ---------- stats helpers ----------
@@ -287,6 +293,7 @@ fn debug_encode_compare() {
         }};
     }
 
+    #[allow(clippy::type_complexity)]
     let scenarios: &[(&str, fn() -> (Vec<u8>, Vec<u8>))] = &[
         ("white", gen_white as fn() -> _),
         ("gradient", gen_gradient as fn() -> _),
