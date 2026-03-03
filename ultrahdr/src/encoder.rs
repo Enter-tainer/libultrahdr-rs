@@ -1,9 +1,7 @@
 //! UltraHDR JPEG encoder: generate gain maps and assemble UltraHDR JPEGs.
 
-use crate::color::Color;
-use crate::color::gamut::luminance;
 use crate::color::transfer::{
-    hlg_inv_oetf, hlg_inv_ootf_approx, pq_inv_oetf, reference_display_peak_nits, srgb_inv_oetf,
+    hlg_inv_oetf, hlg_ootf_approx, pq_inv_oetf, reference_display_peak_nits, srgb_inv_oetf,
     srgb_oetf,
 };
 use crate::error::{Error, Result};
@@ -28,7 +26,7 @@ pub fn generate_gainmap(
     hdr_linear: &[f32],
     width: u32,
     height: u32,
-    gamut: ColorGamut,
+    _gamut: ColorGamut,
     scale: u32,
     multichannel: bool,
     target_peak_nits: f32,
@@ -101,17 +99,20 @@ pub fn generate_gainmap(
                 for ch in 0..3 {
                     let sdr_ch = [sdr_r, sdr_g, sdr_b][ch];
                     let hdr_ch = [hdr_r, hdr_g, hdr_b][ch];
-                    let gain = compute_gain(sdr_ch, hdr_ch);
+                    let sdr_ch_nits = sdr_ch * SDR_WHITE_NITS;
+                    let hdr_ch_nits = hdr_ch * SDR_WHITE_NITS;
+                    let gain = compute_gain(sdr_ch_nits, hdr_ch_nits);
                     gain_values[map_idx * 3 + ch] = gain;
                     min_gain_log2 = min_gain_log2.min(gain);
                     max_gain_log2 = max_gain_log2.max(gain);
                 }
             } else {
-                let sdr_color = Color::new(sdr_r, sdr_g, sdr_b);
-                let hdr_color = Color::new(hdr_r, hdr_g, hdr_b);
-                let sdr_y = luminance(sdr_color, gamut);
-                let hdr_y = luminance(hdr_color, gamut);
-                let gain = compute_gain(sdr_y, hdr_y);
+                // C++ uses fmax(r,g,b) (use_luminance=false), not weighted luminance
+                let sdr_y = sdr_r.max(sdr_g).max(sdr_b);
+                let hdr_y = hdr_r.max(hdr_g).max(hdr_b);
+                let sdr_y_nits = sdr_y * SDR_WHITE_NITS;
+                let hdr_y_nits = hdr_y * SDR_WHITE_NITS;
+                let gain = compute_gain(sdr_y_nits, hdr_y_nits);
                 gain_values[map_idx] = gain;
                 min_gain_log2 = min_gain_log2.min(gain);
                 max_gain_log2 = max_gain_log2.max(gain);
@@ -473,7 +474,7 @@ fn decode_pixels_to_linear(
                 let rl = hlg_inv_oetf(r);
                 let gl = hlg_inv_oetf(g);
                 let bl = hlg_inv_oetf(b);
-                let [ro, go, bo] = hlg_inv_ootf_approx(rl, gl, bl);
+                let [ro, go, bo] = hlg_ootf_approx(rl, gl, bl);
                 (ro * scale_to_sdr, go * scale_to_sdr, bo * scale_to_sdr)
             }
         };
