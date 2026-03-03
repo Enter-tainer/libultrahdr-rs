@@ -32,6 +32,7 @@ pub fn generate_gainmap(
     scale: u32,
     multichannel: bool,
     target_peak_nits: f32,
+    use_base_cg: bool,
 ) -> Result<(Vec<u8>, GainMapMetadata)> {
     let w = width as usize;
     let h = height as usize;
@@ -129,7 +130,7 @@ pub fn generate_gainmap(
 
     let max_content_boost = (2.0f32).powf(max_gain_log2);
     let min_content_boost = (2.0f32).powf(min_gain_log2);
-    let offset = 1.0 / 64.0;
+    let offset = 1e-7;
 
     let metadata = GainMapMetadata {
         max_content_boost: [max_content_boost; 3],
@@ -139,7 +140,7 @@ pub fn generate_gainmap(
         offset_hdr: [offset; 3],
         hdr_capacity_min: 1.0,
         hdr_capacity_max: headroom,
-        use_base_cg: true,
+        use_base_cg,
     };
 
     Ok((gainmap, metadata))
@@ -660,6 +661,7 @@ impl Encoder {
             self.gainmap_scale,
             self.multichannel,
             self.target_display_peak_nits,
+            false,
         )?;
 
         // Encode gain map as JPEG
@@ -713,8 +715,8 @@ mod tests {
             max_content_boost: [4.0; 3],
             min_content_boost: [1.0; 3],
             gamma: [1.0; 3],
-            offset_sdr: [1.0 / 64.0; 3],
-            offset_hdr: [1.0 / 64.0; 3],
+            offset_sdr: [1e-7; 3],
+            offset_hdr: [1e-7; 3],
             hdr_capacity_min: 1.0,
             hdr_capacity_max: 4.0,
             use_base_cg: false,
@@ -737,6 +739,7 @@ mod tests {
             1,
             false,
             1.0,
+            false,
         )
         .unwrap();
         assert_eq!(gainmap.len(), width * height);
@@ -767,6 +770,7 @@ mod tests {
             1,
             false,
             4.0 * SDR_WHITE_NITS,
+            false,
         )
         .unwrap();
         // Metadata should reflect boost > 1
@@ -792,6 +796,7 @@ mod tests {
             2,
             false,
             1.0,
+            false,
         )
         .unwrap();
         // 8/2 = 4, so gain map should be 4x4 = 16 pixels
@@ -813,10 +818,61 @@ mod tests {
             1,
             true,
             1.0,
+            false,
         )
         .unwrap();
         // Multichannel: 3 values per pixel
         assert_eq!(gainmap.len(), width * height * 3);
+    }
+
+    #[test]
+    fn generate_gainmap_metadata_matches_cpp() {
+        // C++ reference values (gainmapmath.h):
+        //   kSdrOffset = kHdrOffset = 1e-7
+        //   use_base_cg = false  (raw / API-0/API-1 path)
+        let width = 8;
+        let height = 8;
+        let mut sdr_linear = vec![0.0f32; width * height * 3];
+        let mut hdr_linear = vec![0.0f32; width * height * 3];
+        for i in 0..(width * height) {
+            let v = (i as f32 + 1.0) / (width * height) as f32;
+            for c in 0..3 {
+                sdr_linear[i * 3 + c] = v * 0.5;
+                hdr_linear[i * 3 + c] = v * 2.0;
+            }
+        }
+        let (_, metadata) = generate_gainmap(
+            &sdr_linear,
+            &hdr_linear,
+            width as u32,
+            height as u32,
+            ColorGamut::Bt709,
+            1,
+            false,
+            1600.0,
+            false,
+        )
+        .unwrap();
+
+        // C++ sets offset_sdr = offset_hdr = kSdrOffset = kHdrOffset = 1e-7
+        for ch in 0..3 {
+            assert!(
+                metadata.offset_sdr[ch] < 0.001,
+                "offset_sdr[{ch}] should be ≈1e-7, got {}",
+                metadata.offset_sdr[ch]
+            );
+            assert!(
+                metadata.offset_hdr[ch] < 0.001,
+                "offset_hdr[{ch}] should be ≈1e-7, got {}",
+                metadata.offset_hdr[ch]
+            );
+        }
+
+        // C++ API-0/API-1 (raw input) sets use_base_cg = false
+        assert!(
+            !metadata.use_base_cg,
+            "use_base_cg should be false for raw input"
+        );
     }
 
     // Task 25: UltraHDR JPEG assembly

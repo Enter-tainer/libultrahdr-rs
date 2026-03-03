@@ -10,7 +10,7 @@
 
 use std::io::Write as _;
 
-use ultrahdr::decoder::{extract_gainmap_jpeg, Decoder};
+use ultrahdr::decoder::{Decoder, extract_gainmap_jpeg};
 use ultrahdr::encoder::Encoder;
 use ultrahdr::types::*;
 use ultrahdr_sys::*;
@@ -108,7 +108,11 @@ unsafe fn cpp_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
         range: uhdr_color_range::UHDR_CR_FULL_RANGE,
         w: W,
         h: H,
-        planes: [hdr.as_ptr() as *mut _, std::ptr::null_mut(), std::ptr::null_mut()],
+        planes: [
+            hdr.as_ptr() as *mut _,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ],
         stride: [W, 0, 0],
     };
     let err = uhdr_enc_set_raw_image(enc, &mut hdr_img, uhdr_img_label::UHDR_HDR_IMG);
@@ -126,7 +130,11 @@ unsafe fn cpp_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
         range: uhdr_color_range::UHDR_CR_FULL_RANGE,
         w: W,
         h: H,
-        planes: [sdr.as_ptr() as *mut _, std::ptr::null_mut(), std::ptr::null_mut()],
+        planes: [
+            sdr.as_ptr() as *mut _,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ],
         stride: [W, 0, 0],
     };
     let err = uhdr_enc_set_raw_image(enc, &mut sdr_img, uhdr_img_label::UHDR_SDR_IMG);
@@ -160,7 +168,10 @@ unsafe fn cpp_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
         } else {
             "no detail".to_string()
         };
-        panic!("C++ encode failed for {label}: {:?} - {detail}", err.error_code);
+        panic!(
+            "C++ encode failed for {label}: {:?} - {detail}",
+            err.error_code
+        );
     }
 
     // Get result
@@ -191,7 +202,11 @@ unsafe fn cpp_probe_metadata(jpeg: &[u8]) -> uhdr_gainmap_metadata {
     assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
 
     let err = uhdr_dec_probe(dec);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK, "probe failed");
+    assert_eq!(
+        err.error_code,
+        uhdr_codec_err::UHDR_CODEC_OK,
+        "probe failed"
+    );
 
     let meta_ptr = uhdr_dec_get_gainmap_metadata(dec);
     assert!(!meta_ptr.is_null(), "get_gainmap_metadata returned null");
@@ -226,7 +241,11 @@ unsafe fn cpp_decode_to_1010102(jpeg: &[u8]) -> Vec<u8> {
     assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
 
     let err = uhdr_decode(dec);
-    assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK, "decode failed");
+    assert_eq!(
+        err.error_code,
+        uhdr_codec_err::UHDR_CODEC_OK,
+        "decode failed"
+    );
 
     let raw_ptr = uhdr_get_decoded_image(dec);
     assert!(!raw_ptr.is_null());
@@ -282,8 +301,10 @@ fn debug_encode_compare() {
         }};
     }
 
-    let scenarios: &[(&str, fn() -> (Vec<u8>, Vec<u8>))] =
-        &[("white", gen_white as fn() -> _), ("gradient", gen_gradient as fn() -> _)];
+    let scenarios: &[(&str, fn() -> (Vec<u8>, Vec<u8>))] = &[
+        ("white", gen_white as fn() -> _),
+        ("gradient", gen_gradient as fn() -> _),
+    ];
 
     for &(name, gen_fn) in scenarios {
         log!("\n{}", "=".repeat(60));
@@ -311,14 +332,8 @@ fn debug_encode_compare() {
         let cpp_meta_raw = unsafe { cpp_probe_metadata(&cpp_out) };
 
         log!("\n[{name}] === METADATA (Rust encoder) ===");
-        log!(
-            "  max_content_boost: {:?}",
-            rust_meta.max_content_boost
-        );
-        log!(
-            "  min_content_boost: {:?}",
-            rust_meta.min_content_boost
-        );
+        log!("  max_content_boost: {:?}", rust_meta.max_content_boost);
+        log!("  min_content_boost: {:?}", rust_meta.min_content_boost);
         log!("  gamma:             {:?}", rust_meta.gamma);
         log!("  offset_sdr:        {:?}", rust_meta.offset_sdr);
         log!("  offset_hdr:        {:?}", rust_meta.offset_hdr);
@@ -327,14 +342,8 @@ fn debug_encode_compare() {
         log!("  use_base_cg:       {}", rust_meta.use_base_cg);
 
         log!("\n[{name}] === METADATA (C++ encoder, via C++ probe) ===");
-        log!(
-            "  max_content_boost: {:?}",
-            cpp_meta_raw.max_content_boost
-        );
-        log!(
-            "  min_content_boost: {:?}",
-            cpp_meta_raw.min_content_boost
-        );
+        log!("  max_content_boost: {:?}", cpp_meta_raw.max_content_boost);
+        log!("  min_content_boost: {:?}", cpp_meta_raw.min_content_boost);
         log!("  gamma:             {:?}", cpp_meta_raw.gamma);
         log!("  offset_sdr:        {:?}", cpp_meta_raw.offset_sdr);
         log!("  offset_hdr:        {:?}", cpp_meta_raw.offset_hdr);
@@ -364,12 +373,8 @@ fn debug_encode_compare() {
         let (r_min, r_max, r_mean) = gainmap_pixel_stats(&rust_out);
         let (c_min, c_max, c_mean) = gainmap_pixel_stats(&cpp_out);
         log!("\n[{name}] === GAIN MAP PIXEL STATS ===");
-        log!(
-            "  Rust: min={r_min}, max={r_max}, mean={r_mean:.2}"
-        );
-        log!(
-            "  C++:  min={c_min}, max={c_max}, mean={c_mean:.2}"
-        );
+        log!("  Rust: min={r_min}, max={r_max}, mean={r_mean:.2}");
+        log!("  C++:  min={c_min}, max={c_max}, mean={c_mean:.2}");
 
         // --- Cross-decode: each output decoded by both decoders ---
         log!("\n[{name}] === CROSS-DECODE MAX 10-bit VALUES ===");
@@ -412,15 +417,33 @@ fn debug_encode_compare() {
         if name == "white" {
             log!("\n[{name}] === DIAGNOSIS ===");
             if rust_meta.max_content_boost[0] <= 1.01 {
-                log!("  WARNING: Rust max_content_boost is ~1.0 ({}) - no HDR boost!", rust_meta.max_content_boost[0]);
+                log!(
+                    "  WARNING: Rust max_content_boost is ~1.0 ({}) - no HDR boost!",
+                    rust_meta.max_content_boost[0]
+                );
             }
             if rust_meta.hdr_capacity_max <= 1.01 {
-                log!("  WARNING: Rust hdr_capacity_max is ~1.0 ({}) - display won't boost!", rust_meta.hdr_capacity_max);
+                log!(
+                    "  WARNING: Rust hdr_capacity_max is ~1.0 ({}) - display won't boost!",
+                    rust_meta.hdr_capacity_max
+                );
             }
             // Compare key metadata diffs
-            log!("  offset_sdr: Rust={:?} vs C++={:?}", rust_meta.offset_sdr, cpp_meta_raw.offset_sdr);
-            log!("  offset_hdr: Rust={:?} vs C++={:?}", rust_meta.offset_hdr, cpp_meta_raw.offset_hdr);
-            log!("  use_base_cg: Rust={} vs C++={}", rust_meta.use_base_cg, cpp_meta_raw.use_base_cg);
+            log!(
+                "  offset_sdr: Rust={:?} vs C++={:?}",
+                rust_meta.offset_sdr,
+                cpp_meta_raw.offset_sdr
+            );
+            log!(
+                "  offset_hdr: Rust={:?} vs C++={:?}",
+                rust_meta.offset_hdr,
+                cpp_meta_raw.offset_hdr
+            );
+            log!(
+                "  use_base_cg: Rust={} vs C++={}",
+                rust_meta.use_base_cg,
+                cpp_meta_raw.use_base_cg
+            );
         }
     }
 

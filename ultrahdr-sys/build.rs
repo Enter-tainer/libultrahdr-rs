@@ -148,11 +148,51 @@ fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
     );
 }
 
+fn init_vendor_git_tag(dir: &Path, tag: &str) {
+    if !dir.is_dir() {
+        return;
+    }
+    // CMake ExternalProject runs `git checkout <tag>` during the update step.
+    // Since copy_dir_recursive skips `.git` directories the copied vendored
+    // sources have no git repository and that checkout fails.  Work around this
+    // by initialising a throwaway repo with the expected tag so the update step
+    // becomes a no-op.
+    let ok = Command::new("git")
+        .current_dir(dir)
+        .args(["init", "-q"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        return;
+    }
+    let _ = Command::new("git")
+        .current_dir(dir)
+        .args(["add", "."])
+        .status();
+    let _ = Command::new("git")
+        .current_dir(dir)
+        .args(["commit", "-q", "-m", "vendor", "--allow-empty"])
+        .env("GIT_AUTHOR_NAME", "build")
+        .env("GIT_AUTHOR_EMAIL", "build@local")
+        .env("GIT_COMMITTER_NAME", "build")
+        .env("GIT_COMMITTER_EMAIL", "build@local")
+        .status();
+    let _ = Command::new("git")
+        .current_dir(dir)
+        .args(["tag", tag])
+        .status();
+}
+
 fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathBuf {
     let work_src = out_dir.join("libultrahdr-src");
     let _ = fs::remove_dir_all(&work_src);
     copy_dir_recursive(src_dir, &work_src).expect("failed to copy libultrahdr sources");
     apply_local_patches(manifest_dir, &work_src);
+
+    // Ensure vendored third-party deps with ExternalProject git tags can build.
+    init_vendor_git_tag(&work_src.join("third_party/turbojpeg"), "3.1.0");
+
     work_src
 }
 
