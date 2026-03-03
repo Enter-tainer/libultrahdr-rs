@@ -518,7 +518,7 @@ mod tests {
 
     /// Create a minimal valid JPEG (SOI + DQT + SOF + SOS + EOI).
     fn create_minimal_jpeg() -> Vec<u8> {
-        crate::jpeg::encode::encode_rgb_to_jpeg(&vec![128u8; 2 * 2 * 3], 2, 2, 90)
+        crate::jpeg::encode::encode_rgb_to_jpeg(&[128u8; 2 * 2 * 3], 2, 2, 90)
             .expect("failed to create test JPEG")
     }
 

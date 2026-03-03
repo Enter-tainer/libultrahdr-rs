@@ -700,7 +700,7 @@ mod tests {
     use super::*;
 
     fn create_minimal_jpeg() -> Vec<u8> {
-        crate::jpeg::encode::encode_rgb_to_jpeg(&vec![128u8; 2 * 2 * 3], 2, 2, 90)
+        crate::jpeg::encode::encode_rgb_to_jpeg(&[128u8; 2 * 2 * 3], 2, 2, 90)
             .expect("failed to create test JPEG")
     }
 
@@ -898,7 +898,7 @@ mod tests {
     fn encoder_builder_api() {
         let hdr_pixels = vec![0u8; 4 * 4 * 4]; // 4x4 RGBA8888
         let sdr_jpeg =
-            crate::jpeg::encode::encode_rgb_to_jpeg(&vec![128u8; 4 * 4 * 3], 4, 4, 90).unwrap();
+            crate::jpeg::encode::encode_rgb_to_jpeg(&[128u8; 4 * 4 * 3], 4, 4, 90).unwrap();
         let result = Encoder::new()
             .hdr_raw(
                 &hdr_pixels,
