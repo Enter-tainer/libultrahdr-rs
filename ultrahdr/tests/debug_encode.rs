@@ -58,23 +58,9 @@ fn gen_gradient() -> (Vec<u8>, Vec<u8>) {
     (sdr, hdr)
 }
 
-// ---------- SDR RGBA8888 → RGB JPEG ----------
-
-fn sdr_rgba_to_jpeg(sdr: &[u8], w: u32, h: u32, quality: u8) -> Vec<u8> {
-    let npx = (w * h) as usize;
-    let mut rgb = vec![0u8; npx * 3];
-    for i in 0..npx {
-        rgb[i * 3] = sdr[i * 4];
-        rgb[i * 3 + 1] = sdr[i * 4 + 1];
-        rgb[i * 3 + 2] = sdr[i * 4 + 2];
-    }
-    ultrahdr::jpeg::encode::encode_rgb_to_jpeg(&rgb, w, h, quality).expect("jpeg encode failed")
-}
-
 // ---------- Rust encoder ----------
 
 fn rust_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
-    let sdr_jpeg = sdr_rgba_to_jpeg(sdr, W, H, 95);
     Encoder::new()
         .hdr_raw(
             hdr,
@@ -84,7 +70,7 @@ fn rust_encode(sdr: &[u8], hdr: &[u8], label: &str) -> Vec<u8> {
             ColorGamut::Bt2100,
             ColorTransfer::Hlg,
         )
-        .sdr_compressed(&sdr_jpeg, ColorGamut::Bt709)
+        .sdr_raw(sdr, W, H, ColorGamut::Bt709)
         .quality(95)
         .gainmap_quality(85)
         .gainmap_scale(4)

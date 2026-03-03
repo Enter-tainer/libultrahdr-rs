@@ -1,5 +1,7 @@
 //! UltraHDR JPEG encoder: generate gain maps and assemble UltraHDR JPEGs.
 
+use crate::color::Color;
+use crate::color::gamut::gamut_convert;
 use crate::color::transfer::{
     hlg_inv_oetf, hlg_ootf_approx, pq_inv_oetf, reference_display_peak_nits, srgb_inv_oetf,
     srgb_oetf,
@@ -26,7 +28,8 @@ pub fn generate_gainmap(
     hdr_linear: &[f32],
     width: u32,
     height: u32,
-    _gamut: ColorGamut,
+    sdr_gamut: ColorGamut,
+    hdr_gamut: ColorGamut,
     scale: u32,
     multichannel: bool,
     target_peak_nits: f32,
@@ -50,6 +53,9 @@ pub fn generate_gainmap(
     let map_h = h.div_ceil(scale as usize);
 
     let headroom = target_peak_nits / SDR_WHITE_NITS;
+
+    // Whether we need gamut conversion for HDR pixels (C++ converts HDR to SDR gamut).
+    let need_gamut_convert = sdr_gamut != hdr_gamut;
 
     // First pass: find min/max gain across the image.
     let mut min_gain_log2 = f32::MAX;
@@ -86,12 +92,30 @@ pub fn generate_gainmap(
                 }
             }
             let inv = 1.0 / count as f32;
-            let sdr_r = sdr_r * inv;
-            let sdr_g = sdr_g * inv;
-            let sdr_b = sdr_b * inv;
-            let hdr_r = hdr_r * inv;
-            let hdr_g = hdr_g * inv;
-            let hdr_b = hdr_b * inv;
+            let mut sdr_r = sdr_r * inv;
+            let mut sdr_g = sdr_g * inv;
+            let mut sdr_b = sdr_b * inv;
+            let mut hdr_r = hdr_r * inv;
+            let mut hdr_g = hdr_g * inv;
+            let mut hdr_b = hdr_b * inv;
+
+            // Gamut conversion: convert HDR to SDR gamut (C++ does this).
+            if need_gamut_convert {
+                let hdr_color =
+                    gamut_convert(Color::new(hdr_r, hdr_g, hdr_b), hdr_gamut, sdr_gamut);
+                hdr_r = hdr_color.r;
+                hdr_g = hdr_color.g;
+                hdr_b = hdr_color.b;
+            }
+
+            // clipNegatives: clip both SDR and HDR channels to max(0, val).
+            // C++ does this after gamut conversion and before gain computation.
+            sdr_r = sdr_r.max(0.0);
+            sdr_g = sdr_g.max(0.0);
+            sdr_b = sdr_b.max(0.0);
+            hdr_r = hdr_r.max(0.0);
+            hdr_g = hdr_g.max(0.0);
+            hdr_b = hdr_b.max(0.0);
 
             let map_idx = my * map_w + mx;
 
@@ -530,6 +554,9 @@ pub struct Encoder {
     hdr_gamut: ColorGamut,
     hdr_transfer: ColorTransfer,
     sdr_jpeg: Option<Vec<u8>>,
+    sdr_pixels: Option<Vec<u8>>,
+    sdr_width: u32,
+    sdr_height: u32,
     sdr_gamut: ColorGamut,
     quality: u8,
     gainmap_quality: u8,
@@ -555,6 +582,9 @@ impl Encoder {
             hdr_gamut: ColorGamut::Bt709,
             hdr_transfer: ColorTransfer::Srgb,
             sdr_jpeg: None,
+            sdr_pixels: None,
+            sdr_width: 0,
+            sdr_height: 0,
             sdr_gamut: ColorGamut::Bt709,
             quality: 95,
             gainmap_quality: 85,
@@ -586,6 +616,19 @@ impl Encoder {
     /// Set SDR input as a compressed JPEG.
     pub fn sdr_compressed(mut self, jpeg: &[u8], gamut: ColorGamut) -> Self {
         self.sdr_jpeg = Some(jpeg.to_vec());
+        self.sdr_gamut = gamut;
+        self
+    }
+
+    /// Set SDR input as raw pixels (RGBA8888).
+    ///
+    /// When raw SDR is provided, the encoder uses these pixels directly
+    /// (bypassing JPEG decode losses) for gain map computation, and
+    /// JPEG-encodes them for the output base image.
+    pub fn sdr_raw(mut self, pixels: &[u8], width: u32, height: u32, gamut: ColorGamut) -> Self {
+        self.sdr_pixels = Some(pixels.to_vec());
+        self.sdr_width = width;
+        self.sdr_height = height;
         self.sdr_gamut = gamut;
         self
     }
@@ -643,8 +686,47 @@ impl Encoder {
         let w = self.hdr_width as usize;
         let h = self.hdr_height as usize;
 
-        // Resolve SDR: use provided JPEG, or auto-tonemap from HDR
-        let (sdr_jpeg_data, sdr_linear) = if let Some(sdr_jpeg) = &self.sdr_jpeg {
+        // Resolve SDR: use raw pixels, compressed JPEG, or auto-tonemap from HDR
+        let (sdr_jpeg_data, sdr_linear) = if let Some(sdr_pixels) = &self.sdr_pixels {
+            // Raw SDR path: decode RGBA8888 directly, no JPEG losses
+            if self.sdr_width != self.hdr_width || self.sdr_height != self.hdr_height {
+                return Err(Error::InvalidParam(format!(
+                    "SDR dimensions {}x{} don't match HDR {}x{}",
+                    self.sdr_width, self.sdr_height, self.hdr_width, self.hdr_height,
+                )));
+            }
+            let npx = w * h;
+            let expected_bytes = npx * 4; // RGBA8888
+            if sdr_pixels.len() < expected_bytes {
+                return Err(Error::InvalidParam(format!(
+                    "SDR pixel buffer too small: need {expected_bytes}, got {}",
+                    sdr_pixels.len(),
+                )));
+            }
+            // Convert RGBA8888 to linear RGB via srgb_inv_oetf
+            let mut lin = vec![0.0f32; npx * 3];
+            let mut sdr_rgb = vec![0u8; npx * 3];
+            for i in 0..npx {
+                let r = sdr_pixels[i * 4] as f32 / 255.0;
+                let g = sdr_pixels[i * 4 + 1] as f32 / 255.0;
+                let b = sdr_pixels[i * 4 + 2] as f32 / 255.0;
+                lin[i * 3] = srgb_inv_oetf(r);
+                lin[i * 3 + 1] = srgb_inv_oetf(g);
+                lin[i * 3 + 2] = srgb_inv_oetf(b);
+                // Also build RGB for JPEG encoding
+                sdr_rgb[i * 3] = sdr_pixels[i * 4];
+                sdr_rgb[i * 3 + 1] = sdr_pixels[i * 4 + 1];
+                sdr_rgb[i * 3 + 2] = sdr_pixels[i * 4 + 2];
+            }
+            // JPEG encode the raw SDR for the output base image
+            let jpeg = crate::jpeg::encode::encode_rgb_to_jpeg(
+                &sdr_rgb,
+                self.hdr_width,
+                self.hdr_height,
+                self.quality,
+            )?;
+            (AutoSdr::Generated(jpeg), lin)
+        } else if let Some(sdr_jpeg) = &self.sdr_jpeg {
             let sdr_decoded = crate::jpeg::decode::decode_jpeg(sdr_jpeg)?;
             if sdr_decoded.width != self.hdr_width || sdr_decoded.height != self.hdr_height {
                 return Err(Error::InvalidParam(format!(
@@ -696,6 +778,7 @@ impl Encoder {
             &hdr_linear,
             self.hdr_width,
             self.hdr_height,
+            self.sdr_gamut,
             self.hdr_gamut,
             self.gainmap_scale,
             self.multichannel,
@@ -775,6 +858,7 @@ mod tests {
             width as u32,
             height as u32,
             ColorGamut::Bt709,
+            ColorGamut::Bt709,
             1,
             false,
             1.0,
@@ -806,6 +890,7 @@ mod tests {
             width as u32,
             height as u32,
             ColorGamut::Bt709,
+            ColorGamut::Bt709,
             1,
             false,
             4.0 * SDR_WHITE_NITS,
@@ -832,6 +917,7 @@ mod tests {
             width as u32,
             height as u32,
             ColorGamut::Bt709,
+            ColorGamut::Bt709,
             2,
             false,
             1.0,
@@ -853,6 +939,7 @@ mod tests {
             &hdr_linear,
             width as u32,
             height as u32,
+            ColorGamut::Bt709,
             ColorGamut::Bt709,
             1,
             true,
@@ -885,6 +972,7 @@ mod tests {
             &hdr_linear,
             width as u32,
             height as u32,
+            ColorGamut::Bt709,
             ColorGamut::Bt709,
             1,
             false,
@@ -936,6 +1024,7 @@ mod tests {
             &hdr_linear,
             width as u32,
             height as u32,
+            ColorGamut::Bt709,
             ColorGamut::Bt709,
             1,
             false,
