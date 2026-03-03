@@ -404,24 +404,50 @@ pub fn apply_gainmap_to_sdr(
                 }
             };
 
-            // Apply output transfer function
+            // Apply output transfer function.
+            // Constants from C++ libultrahdr (gainmapmath.h):
+            const SDR_WHITE_NITS: f32 = 203.0;
+            const HLG_MAX_NITS: f32 = 1000.0;
+            const PQ_MAX_NITS: f32 = 10000.0;
+            const MAX_LINEAR: f32 = PQ_MAX_NITS / SDR_WHITE_NITS; // ~49.26
+
             let (r_out, g_out, b_out) = match output_transfer {
-                ColorTransfer::Linear => (hdr_color.r, hdr_color.g, hdr_color.b),
+                ColorTransfer::Linear => {
+                    // C++: clampPixelFloatLinear — clamp to [0, 10000/203]
+                    (
+                        hdr_color.r.clamp(0.0, MAX_LINEAR),
+                        hdr_color.g.clamp(0.0, MAX_LINEAR),
+                        hdr_color.b.clamp(0.0, MAX_LINEAR),
+                    )
+                }
                 ColorTransfer::Srgb => (
                     srgb_oetf(hdr_color.r.max(0.0)),
                     srgb_oetf(hdr_color.g.max(0.0)),
                     srgb_oetf(hdr_color.b.max(0.0)),
                 ),
-                ColorTransfer::Pq => (
-                    pq_oetf(hdr_color.r.max(0.0)),
-                    pq_oetf(hdr_color.g.max(0.0)),
-                    pq_oetf(hdr_color.b.max(0.0)),
-                ),
-                ColorTransfer::Hlg => (
-                    hlg_oetf(hdr_color.r.max(0.0)),
-                    hlg_oetf(hdr_color.g.max(0.0)),
-                    hlg_oetf(hdr_color.b.max(0.0)),
-                ),
+                ColorTransfer::Pq => {
+                    // C++: scale by kSdrWhiteNits/kPqMaxNits, clamp [0,1], then pqOetf
+                    let scale = SDR_WHITE_NITS / PQ_MAX_NITS;
+                    let r = (hdr_color.r * scale).clamp(0.0, 1.0);
+                    let g = (hdr_color.g * scale).clamp(0.0, 1.0);
+                    let b = (hdr_color.b * scale).clamp(0.0, 1.0);
+                    (pq_oetf(r), pq_oetf(g), pq_oetf(b))
+                }
+                ColorTransfer::Hlg => {
+                    // C++: scale by kSdrWhiteNits/kHlgMaxNits, clamp [0,1],
+                    // hlgInverseOotfApprox (pow(x, 1/1.2)), then hlgOetf
+                    let scale = SDR_WHITE_NITS / HLG_MAX_NITS;
+                    let r = (hdr_color.r * scale).clamp(0.0, 1.0);
+                    let g = (hdr_color.g * scale).clamp(0.0, 1.0);
+                    let b = (hdr_color.b * scale).clamp(0.0, 1.0);
+                    // hlgInverseOotfApprox: pow(x, 1/kOotfGamma) where kOotfGamma = 1.2
+                    let inv_gamma = 1.0_f32 / 1.2;
+                    (
+                        hlg_oetf(r.powf(inv_gamma)),
+                        hlg_oetf(g.powf(inv_gamma)),
+                        hlg_oetf(b.powf(inv_gamma)),
+                    )
+                }
             };
 
             // Write output pixel
