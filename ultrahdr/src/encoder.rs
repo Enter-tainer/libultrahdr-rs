@@ -63,17 +63,37 @@ pub fn generate_gainmap(
 
     for my in 0..map_h {
         for mx in 0..map_w {
-            // Sample the center pixel of each block.
-            let sx = (mx * scale as usize + scale as usize / 2).min(w - 1);
-            let sy = (my * scale as usize + scale as usize / 2).min(h - 1);
-            let idx = (sy * w + sx) * 3;
-
-            let sdr_r = sdr_linear[idx];
-            let sdr_g = sdr_linear[idx + 1];
-            let sdr_b = sdr_linear[idx + 2];
-            let hdr_r = hdr_linear[idx];
-            let hdr_g = hdr_linear[idx + 1];
-            let hdr_b = hdr_linear[idx + 2];
+            // Average all pixels in the scale×scale block (matching C++ samplePixels).
+            let x_start = mx * scale as usize;
+            let y_start = my * scale as usize;
+            let x_end = (x_start + scale as usize).min(w);
+            let y_end = (y_start + scale as usize).min(h);
+            let mut sdr_r = 0.0f32;
+            let mut sdr_g = 0.0f32;
+            let mut sdr_b = 0.0f32;
+            let mut hdr_r = 0.0f32;
+            let mut hdr_g = 0.0f32;
+            let mut hdr_b = 0.0f32;
+            let mut count = 0usize;
+            for sy in y_start..y_end {
+                for sx in x_start..x_end {
+                    let idx = (sy * w + sx) * 3;
+                    sdr_r += sdr_linear[idx];
+                    sdr_g += sdr_linear[idx + 1];
+                    sdr_b += sdr_linear[idx + 2];
+                    hdr_r += hdr_linear[idx];
+                    hdr_g += hdr_linear[idx + 1];
+                    hdr_b += hdr_linear[idx + 2];
+                    count += 1;
+                }
+            }
+            let inv = 1.0 / count as f32;
+            let sdr_r = sdr_r * inv;
+            let sdr_g = sdr_g * inv;
+            let sdr_b = sdr_b * inv;
+            let hdr_r = hdr_r * inv;
+            let hdr_g = hdr_g * inv;
+            let hdr_b = hdr_b * inv;
 
             let map_idx = my * map_w + mx;
 
@@ -106,15 +126,12 @@ pub fn generate_gainmap(
     if max_gain_log2 == f32::MIN {
         max_gain_log2 = 0.0;
     }
-    // Clamp max_gain to headroom
-    max_gain_log2 = max_gain_log2.max(0.0).min(headroom.log2());
-    // Ensure min <= max
-    if min_gain_log2 > max_gain_log2 {
-        min_gain_log2 = max_gain_log2;
-    }
-    // Ensure at least some range to avoid division by zero
-    if (max_gain_log2 - min_gain_log2).abs() < 1e-6 {
-        max_gain_log2 = min_gain_log2 + 1e-6;
+    // Clamp gain range to [-14.3, 15.6] matching C++ generateGainMapTwoPass.
+    min_gain_log2 = min_gain_log2.clamp(-14.3, 15.6);
+    max_gain_log2 = max_gain_log2.clamp(-14.3, 15.6);
+    // Ensure at least some range to avoid division by zero (C++ uses FLT_EPSILON + 0.1)
+    if (max_gain_log2 - min_gain_log2).abs() < f32::EPSILON {
+        max_gain_log2 += 0.1;
     }
 
     // Second pass: quantize gain values to u8.
@@ -872,6 +889,50 @@ mod tests {
         assert!(
             !metadata.use_base_cg,
             "use_base_cg should be false for raw input"
+        );
+    }
+
+    #[test]
+    fn generate_gainmap_allows_negative_gain() {
+        // HDR dimmer than SDR everywhere → all gain < 1 → all log2 < 0
+        // C++ clamps to (-14.3, 15.6), Rust incorrectly uses max(0).min(headroom)
+        // which forces max_gain_log2 to 0 when all gains are negative.
+        let width = 4;
+        let height = 4;
+        let mut sdr_linear = vec![0.0f32; width * height * 3];
+        let mut hdr_linear = vec![0.0f32; width * height * 3];
+        for i in 0..(width * height) {
+            let v = (i as f32 + 1.0) / (width * height) as f32;
+            for c in 0..3 {
+                sdr_linear[i * 3 + c] = v * 0.8; // SDR brighter
+                hdr_linear[i * 3 + c] = v * 0.3; // HDR dimmer
+            }
+        }
+
+        let (_, metadata) = generate_gainmap(
+            &sdr_linear,
+            &hdr_linear,
+            width as u32,
+            height as u32,
+            ColorGamut::Bt709,
+            1,
+            false,
+            1600.0,
+            false,
+        )
+        .unwrap();
+
+        // Both min and max content boost should be < 1.0
+        // C++ preserves the negative max_gain_log2 via clamp(-14.3, 15.6)
+        assert!(
+            metadata.max_content_boost[0] < 1.0,
+            "max_content_boost should be < 1.0 when all HDR dimmer than SDR, got {}",
+            metadata.max_content_boost[0]
+        );
+        assert!(
+            metadata.min_content_boost[0] < 1.0,
+            "min_content_boost should be < 1.0 when HDR dimmer than SDR, got {}",
+            metadata.min_content_boost[0]
         );
     }
 
