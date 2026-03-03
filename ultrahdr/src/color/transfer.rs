@@ -47,7 +47,11 @@ const HLG_OOTF_GAMMA: f32 = 1.2;
 
 /// Approximate HLG OOTF per-channel.
 pub fn hlg_ootf_approx(r: f32, g: f32, b: f32) -> [f32; 3] {
-    [r.powf(HLG_OOTF_GAMMA), g.powf(HLG_OOTF_GAMMA), b.powf(HLG_OOTF_GAMMA)]
+    [
+        r.powf(HLG_OOTF_GAMMA),
+        g.powf(HLG_OOTF_GAMMA),
+        b.powf(HLG_OOTF_GAMMA),
+    ]
 }
 
 /// Approximate HLG inverse OOTF per-channel.
@@ -129,7 +133,10 @@ mod tests {
             let linear = i as f32 / 10.0;
             let encoded = pq_oetf(linear);
             let decoded = pq_inv_oetf(encoded);
-            assert!((linear - decoded).abs() < 1e-4, "failed at {linear}: got {decoded}");
+            assert!(
+                (linear - decoded).abs() < 1e-4,
+                "failed at {linear}: got {decoded}"
+            );
         }
     }
 

@@ -60,8 +60,8 @@ pub fn apply_gain_single(color: Color, gain: f32, metadata: &GainMapMetadata) ->
     if metadata.gamma[0] != 1.0 {
         g = g.powf(1.0 / metadata.gamma[0]);
     }
-    let log_boost = metadata.min_content_boost[0].log2() * (1.0 - g)
-        + metadata.max_content_boost[0].log2() * g;
+    let log_boost =
+        metadata.min_content_boost[0].log2() * (1.0 - g) + metadata.max_content_boost[0].log2() * g;
     let gain_factor = log_boost.exp2();
     (color + metadata.offset_sdr[0]) * gain_factor - metadata.offset_hdr[0]
 }
@@ -83,12 +83,12 @@ pub fn apply_gain_multi(color: Color, gain_rgb: [f32; 3], metadata: &GainMapMeta
         gb = gb.powf(1.0 / metadata.gamma[2]);
     }
 
-    let log_r =
-        metadata.min_content_boost[0].log2() * (1.0 - gr) + metadata.max_content_boost[0].log2() * gr;
-    let log_g =
-        metadata.min_content_boost[1].log2() * (1.0 - gg) + metadata.max_content_boost[1].log2() * gg;
-    let log_b =
-        metadata.min_content_boost[2].log2() * (1.0 - gb) + metadata.max_content_boost[2].log2() * gb;
+    let log_r = metadata.min_content_boost[0].log2() * (1.0 - gr)
+        + metadata.max_content_boost[0].log2() * gr;
+    let log_g = metadata.min_content_boost[1].log2() * (1.0 - gg)
+        + metadata.max_content_boost[1].log2() * gg;
+    let log_b = metadata.min_content_boost[2].log2() * (1.0 - gb)
+        + metadata.max_content_boost[2].log2() * gb;
 
     Color::new(
         (color.r + metadata.offset_sdr[0]) * log_r.exp2() - metadata.offset_hdr[0],
@@ -162,11 +162,7 @@ fn reinhard_map(y_hdr: f32, headroom: f32) -> f32 {
 ///
 /// Returns `(tone_mapped_rgb, y_sdr, y_hdr)`.
 /// Port of `globalTonemap()` from jpegr.cpp.
-pub fn global_tonemap(
-    rgb: [f32; 3],
-    headroom: f32,
-    is_normalized: bool,
-) -> ([f32; 3], f32, f32) {
+pub fn global_tonemap(rgb: [f32; 3], headroom: f32, is_normalized: bool) -> ([f32; 3], f32, f32) {
     // Scale to headroom to get HDR values referenced to SDR white.
     let rgb_hdr: [f32; 3] = if is_normalized {
         [rgb[0] * headroom, rgb[1] * headroom, rgb[2] * headroom]
@@ -181,9 +177,21 @@ pub fn global_tonemap(
     let rgb_sdr = if max_hdr > 0.0 {
         let ratio = max_sdr / max_hdr;
         [
-            if rgb_hdr[0] > 0.0 { rgb_hdr[0] * ratio } else { 0.0 },
-            if rgb_hdr[1] > 0.0 { rgb_hdr[1] * ratio } else { 0.0 },
-            if rgb_hdr[2] > 0.0 { rgb_hdr[2] * ratio } else { 0.0 },
+            if rgb_hdr[0] > 0.0 {
+                rgb_hdr[0] * ratio
+            } else {
+                0.0
+            },
+            if rgb_hdr[1] > 0.0 {
+                rgb_hdr[1] * ratio
+            } else {
+                0.0
+            },
+            if rgb_hdr[2] > 0.0 {
+                rgb_hdr[2] * ratio
+            } else {
+                0.0
+            },
         ]
     } else {
         [0.0, 0.0, 0.0]

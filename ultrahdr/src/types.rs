@@ -80,9 +80,8 @@ impl GainMapMetadata {
 
     /// Whether all three channels have identical metadata values.
     pub fn are_all_channels_identical(&self) -> bool {
-        let eq3 = |a: &[f32; 3]| {
-            (a[0] - a[1]).abs() < f32::EPSILON && (a[0] - a[2]).abs() < f32::EPSILON
-        };
+        let eq3 =
+            |a: &[f32; 3]| (a[0] - a[1]).abs() < f32::EPSILON && (a[0] - a[2]).abs() < f32::EPSILON;
         eq3(&self.max_content_boost)
             && eq3(&self.min_content_boost)
             && eq3(&self.gamma)

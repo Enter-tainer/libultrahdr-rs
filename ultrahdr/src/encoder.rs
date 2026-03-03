@@ -1,15 +1,15 @@
 //! UltraHDR JPEG encoder: generate gain maps and assemble UltraHDR JPEGs.
 
+use crate::color::Color;
 use crate::color::gamut::luminance;
 use crate::color::transfer::{
     hlg_inv_oetf, hlg_inv_ootf_approx, pq_inv_oetf, reference_display_peak_nits, srgb_inv_oetf,
     srgb_oetf,
 };
-use crate::color::Color;
 use crate::error::{Error, Result};
 use crate::gainmap::math::{compute_gain, global_tonemap};
 use crate::gainmap::metadata::{
-    encode_gainmap_metadata, write_xmp_gainmap_metadata, GainMapMetadataFrac,
+    GainMapMetadataFrac, encode_gainmap_metadata, write_xmp_gainmap_metadata,
 };
 use crate::jpeg::parse_jpeg_segments;
 use crate::mpf::{calculate_mpf_size, generate_mpf};
@@ -431,11 +431,7 @@ fn decode_pixels_to_linear(
                 let gl = hlg_inv_oetf(g);
                 let bl = hlg_inv_oetf(b);
                 let [ro, go, bo] = hlg_inv_ootf_approx(rl, gl, bl);
-                (
-                    ro * scale_to_sdr,
-                    go * scale_to_sdr,
-                    bo * scale_to_sdr,
-                )
+                (ro * scale_to_sdr, go * scale_to_sdr, bo * scale_to_sdr)
             }
         };
 
@@ -840,9 +836,7 @@ mod tests {
         let out = assemble_ultrahdr(&sdr_jpeg, &gainmap_jpeg, &meta, None, None).unwrap();
         // Check that XMP signature is present
         let xmp_sig = b"http://ns.adobe.com/xap/1.0/\0";
-        let contains_xmp = out
-            .windows(xmp_sig.len())
-            .any(|w| w == xmp_sig);
+        let contains_xmp = out.windows(xmp_sig.len()).any(|w| w == xmp_sig);
         assert!(contains_xmp, "output should contain XMP metadata");
     }
 
@@ -903,13 +897,8 @@ mod tests {
     #[test]
     fn encoder_builder_api() {
         let hdr_pixels = vec![0u8; 4 * 4 * 4]; // 4x4 RGBA8888
-        let sdr_jpeg = crate::jpeg::encode::encode_rgb_to_jpeg(
-            &vec![128u8; 4 * 4 * 3],
-            4,
-            4,
-            90,
-        )
-        .unwrap();
+        let sdr_jpeg =
+            crate::jpeg::encode::encode_rgb_to_jpeg(&vec![128u8; 4 * 4 * 3], 4, 4, 90).unwrap();
         let result = Encoder::new()
             .hdr_raw(
                 &hdr_pixels,
@@ -927,7 +916,11 @@ mod tests {
             .target_display_peak_nits(1600.0)
             .encode();
         // Should produce a valid UltraHDR JPEG
-        assert!(result.is_ok(), "encode() should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "encode() should succeed: {:?}",
+            result.err()
+        );
         let out = result.unwrap();
         assert_eq!(&out[..2], &[0xFF, 0xD8]); // SOI
     }
@@ -954,7 +947,11 @@ mod tests {
                 ColorTransfer::Srgb,
             )
             .encode();
-        assert!(result.is_ok(), "auto tonemap should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "auto tonemap should succeed: {:?}",
+            result.err()
+        );
         let out = result.unwrap();
         assert_eq!(&out[..2], &[0xFF, 0xD8]);
     }

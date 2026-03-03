@@ -46,12 +46,12 @@ mod tests {
         let width = 4;
         let height = 4;
         let pixels: Vec<u8> = (0..width * height * 3).map(|i| (i % 256) as u8).collect();
-        let jpeg = encode_rgb_to_jpeg(&pixels, width as u32, height as u32, 95)
-            .expect("encode failed");
+        let jpeg =
+            encode_rgb_to_jpeg(&pixels, width as u32, height as u32, 95).expect("encode failed");
         // Verify JPEG starts with SOI marker
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
         // Verify it ends with EOI marker
-        assert_eq!(&jpeg[jpeg.len()-2..], &[0xFF, 0xD9]);
+        assert_eq!(&jpeg[jpeg.len() - 2..], &[0xFF, 0xD9]);
     }
 
     #[test]

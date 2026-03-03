@@ -1,10 +1,12 @@
 //! UltraHDR JPEG decoder: extract gain map, apply it, and produce HDR output.
 
 use crate::color::Color;
-use crate::color::transfer::{srgb_inv_oetf, srgb_oetf, pq_oetf, hlg_oetf};
+use crate::color::transfer::{hlg_oetf, pq_oetf, srgb_inv_oetf, srgb_oetf};
 use crate::error::{Error, Result};
-use crate::gainmap::math::{apply_gain_single, apply_gain_multi, sample_map_bilinear};
-use crate::gainmap::metadata::{decode_gainmap_metadata, fraction_to_float, parse_xmp_gainmap_metadata};
+use crate::gainmap::math::{apply_gain_multi, apply_gain_single, sample_map_bilinear};
+use crate::gainmap::metadata::{
+    decode_gainmap_metadata, fraction_to_float, parse_xmp_gainmap_metadata,
+};
 use crate::jpeg::parse_jpeg_segments;
 use crate::types::{ColorGamut, ColorTransfer, GainMapMetadata, PixelFormat};
 
@@ -290,7 +292,8 @@ pub fn apply_gainmap_to_sdr(
 
     // Compute display boost weight (how much of the gain map to apply).
     // weight = 0 means SDR (no boost), weight = 1 means full HDR.
-    let display_boost = max_display_boost.clamp(metadata.hdr_capacity_min, metadata.hdr_capacity_max);
+    let display_boost =
+        max_display_boost.clamp(metadata.hdr_capacity_min, metadata.hdr_capacity_max);
     let weight = if (metadata.hdr_capacity_max - metadata.hdr_capacity_min).abs() < f32::EPSILON {
         0.0
     } else {
@@ -461,9 +464,8 @@ impl<'a> Decoder<'a> {
     pub fn decode(&self) -> Result<DecodedImage> {
         // Extract gain map
         let extract = extract_gainmap_jpeg(self.data)?;
-        let extract = extract.ok_or_else(|| {
-            Error::InvalidParam("not an UltraHDR JPEG: no gain map found".into())
-        })?;
+        let extract = extract
+            .ok_or_else(|| Error::InvalidParam("not an UltraHDR JPEG: no gain map found".into()))?;
 
         // Decode primary (SDR) JPEG
         let primary = crate::jpeg::decode::decode_jpeg(self.data)?;
@@ -479,7 +481,11 @@ impl<'a> Decoder<'a> {
         let gm_decoded = crate::jpeg::decode::decode_jpeg(&extract.gainmap_jpeg)?;
 
         // Convert primary pixels from RGB to RGBA
-        let sdr_rgba = rgb_to_rgba(&primary.pixels, primary.width as usize, primary.height as usize);
+        let sdr_rgba = rgb_to_rgba(
+            &primary.pixels,
+            primary.width as usize,
+            primary.height as usize,
+        );
 
         // Apply gain map
         let hdr_data = apply_gainmap_to_sdr(
@@ -512,10 +518,8 @@ mod tests {
 
     /// Create a minimal valid JPEG (SOI + DQT + SOF + SOS + EOI).
     fn create_minimal_jpeg() -> Vec<u8> {
-        crate::jpeg::encode::encode_rgb_to_jpeg(
-            &vec![128u8; 2 * 2 * 3],
-            2, 2, 90,
-        ).expect("failed to create test JPEG")
+        crate::jpeg::encode::encode_rgb_to_jpeg(&vec![128u8; 2 * 2 * 3], 2, 2, 90)
+            .expect("failed to create test JPEG")
     }
 
     #[test]
@@ -532,8 +536,7 @@ mod tests {
         let width = 2;
         let height = 2;
         let sdr_pixels: Vec<u8> = vec![
-            128, 128, 128, 255, 128, 128, 128, 255,
-            128, 128, 128, 255, 128, 128, 128, 255,
+            128, 128, 128, 255, 128, 128, 128, 255, 128, 128, 128, 255, 128, 128, 128, 255,
         ];
         let gainmap: Vec<u8> = vec![128; 4]; // 2x2 single-channel
         let meta = GainMapMetadata {
@@ -547,8 +550,13 @@ mod tests {
             use_base_cg: true,
         };
         let result = apply_gainmap_to_sdr(
-            &sdr_pixels, width, height,
-            &gainmap, 2, 2, &meta,
+            &sdr_pixels,
+            width,
+            height,
+            &gainmap,
+            2,
+            2,
+            &meta,
             1.0, // max_display_boost = 1.0 => no boost
             ColorTransfer::Srgb,
             PixelFormat::Rgba8888,

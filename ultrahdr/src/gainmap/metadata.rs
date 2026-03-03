@@ -77,7 +77,9 @@ impl<'a> Reader<'a> {
 
     fn read_u8(&mut self) -> Result<u8> {
         if self.pos >= self.data.len() {
-            return Err(Error::MetadataError("unexpected end of data reading u8".into()));
+            return Err(Error::MetadataError(
+                "unexpected end of data reading u8".into(),
+            ));
         }
         let v = self.data[self.pos];
         self.pos += 1;
@@ -86,7 +88,9 @@ impl<'a> Reader<'a> {
 
     fn read_u16(&mut self) -> Result<u16> {
         if self.pos + 1 >= self.data.len() {
-            return Err(Error::MetadataError("unexpected end of data reading u16".into()));
+            return Err(Error::MetadataError(
+                "unexpected end of data reading u16".into(),
+            ));
         }
         let v = u16::from_be_bytes([self.data[self.pos], self.data[self.pos + 1]]);
         self.pos += 2;
@@ -95,7 +99,9 @@ impl<'a> Reader<'a> {
 
     fn read_u32(&mut self) -> Result<u32> {
         if self.pos + 3 >= self.data.len() {
-            return Err(Error::MetadataError("unexpected end of data reading u32".into()));
+            return Err(Error::MetadataError(
+                "unexpected end of data reading u32".into(),
+            ));
         }
         let v = u32::from_be_bytes([
             self.data[self.pos],
@@ -109,7 +115,9 @@ impl<'a> Reader<'a> {
 
     fn read_s32(&mut self) -> Result<i32> {
         if self.pos + 3 >= self.data.len() {
-            return Err(Error::MetadataError("unexpected end of data reading s32".into()));
+            return Err(Error::MetadataError(
+                "unexpected end of data reading s32".into(),
+            ));
         }
         let v = i32::from_be_bytes([
             self.data[self.pos],
@@ -209,7 +217,11 @@ pub fn decode_gainmap_metadata(data: &[u8]) -> Result<GainMapMetadataFrac> {
     let _writer_version = r.read_u16()?;
 
     let flags = r.read_u8()?;
-    let channel_count = if flags & IS_MULTI_CHANNEL_MASK != 0 { 3usize } else { 1usize };
+    let channel_count = if flags & IS_MULTI_CHANNEL_MASK != 0 {
+        3usize
+    } else {
+        1usize
+    };
     let use_base_color_space = flags & USE_BASE_COLOR_SPACE_MASK != 0;
     let backward_direction = flags & BACKWARD_DIRECTION_MASK != 0;
     let use_common = flags & COMMON_DENOMINATOR_MASK != 0;
@@ -329,9 +341,8 @@ pub fn fraction_to_float(frac: &GainMapMetadataFrac) -> Result<GainMapMetadata> 
         offset_hdr[i] = frac.alternate_offset_n[i] as f32 / frac.alternate_offset_d[i] as f32;
     }
 
-    let hdr_capacity_max = (2.0f32).powf(
-        frac.alternate_hdr_headroom_n as f32 / frac.alternate_hdr_headroom_d as f32,
-    );
+    let hdr_capacity_max =
+        (2.0f32).powf(frac.alternate_hdr_headroom_n as f32 / frac.alternate_hdr_headroom_d as f32);
     let hdr_capacity_min =
         (2.0f32).powf(frac.base_hdr_headroom_n as f32 / frac.base_hdr_headroom_d as f32);
 
@@ -356,16 +367,40 @@ pub fn write_xmp_gainmap_metadata(meta: &GainMapMetadata) -> Result<Vec<u8>> {
     use std::fmt::Write;
     let mut s = String::new();
     writeln!(s, "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">").unwrap();
-    writeln!(s, " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">").unwrap();
+    writeln!(
+        s,
+        " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+    )
+    .unwrap();
     writeln!(s, "  <rdf:Description xmlns:hdrgm=\"{HDRGM_NS}\"").unwrap();
     writeln!(s, "   hdrgm:Version=\"1.0\"").unwrap();
-    writeln!(s, "   hdrgm:GainMapMin=\"{}\"", meta.min_content_boost[0].log2()).unwrap();
-    writeln!(s, "   hdrgm:GainMapMax=\"{}\"", meta.max_content_boost[0].log2()).unwrap();
+    writeln!(
+        s,
+        "   hdrgm:GainMapMin=\"{}\"",
+        meta.min_content_boost[0].log2()
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "   hdrgm:GainMapMax=\"{}\"",
+        meta.max_content_boost[0].log2()
+    )
+    .unwrap();
     writeln!(s, "   hdrgm:Gamma=\"{}\"", meta.gamma[0]).unwrap();
     writeln!(s, "   hdrgm:OffsetSDR=\"{}\"", meta.offset_sdr[0]).unwrap();
     writeln!(s, "   hdrgm:OffsetHDR=\"{}\"", meta.offset_hdr[0]).unwrap();
-    writeln!(s, "   hdrgm:HDRCapacityMin=\"{}\"", meta.hdr_capacity_min.log2()).unwrap();
-    writeln!(s, "   hdrgm:HDRCapacityMax=\"{}\"", meta.hdr_capacity_max.log2()).unwrap();
+    writeln!(
+        s,
+        "   hdrgm:HDRCapacityMin=\"{}\"",
+        meta.hdr_capacity_min.log2()
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "   hdrgm:HDRCapacityMax=\"{}\"",
+        meta.hdr_capacity_max.log2()
+    )
+    .unwrap();
     writeln!(s, "   hdrgm:BaseRenditionIsHDR=\"False\"/>").unwrap();
     writeln!(s, " </rdf:RDF>").unwrap();
     write!(s, "</x:xmpmeta>").unwrap();
@@ -389,9 +424,7 @@ pub fn parse_xmp_gainmap_metadata(data: &[u8]) -> Result<GainMapMetadata> {
         })
         .ok_or_else(|| Error::MetadataError("no hdrgm rdf:Description found".into()))?;
 
-    let get_attr = |local_name: &str| -> Option<&str> {
-        desc.attribute((HDRGM_NS, local_name))
-    };
+    let get_attr = |local_name: &str| -> Option<&str> { desc.attribute((HDRGM_NS, local_name)) };
 
     let parse_f32 = |local_name: &str| -> Result<f32> {
         let val = get_attr(local_name)
@@ -464,7 +497,10 @@ mod tests {
         let encoded = encode_gainmap_metadata(&frac).unwrap();
         let decoded = decode_gainmap_metadata(&encoded).unwrap();
         assert_eq!(frac.gain_map_min_n, decoded.gain_map_min_n);
-        assert_eq!(frac.alternate_hdr_headroom_n, decoded.alternate_hdr_headroom_n);
+        assert_eq!(
+            frac.alternate_hdr_headroom_n,
+            decoded.alternate_hdr_headroom_n
+        );
         assert_eq!(frac.use_base_color_space, decoded.use_base_color_space);
     }
 

@@ -2,12 +2,9 @@ use crate::types::{ColorGamut, ColorTransfer};
 
 const MATCH_TOLERANCE: f32 = 0.005;
 
-pub const PRIMARIES_BT709: [[f32; 2]; 3] =
-    [[0.6400, 0.3300], [0.3000, 0.6000], [0.1500, 0.0600]];
-const PRIMARIES_DISPLAY_P3: [[f32; 2]; 3] =
-    [[0.6800, 0.3200], [0.2650, 0.6900], [0.1500, 0.0600]];
-const PRIMARIES_BT2100: [[f32; 2]; 3] =
-    [[0.7080, 0.2920], [0.1700, 0.7970], [0.1310, 0.0460]];
+pub const PRIMARIES_BT709: [[f32; 2]; 3] = [[0.6400, 0.3300], [0.3000, 0.6000], [0.1500, 0.0600]];
+const PRIMARIES_DISPLAY_P3: [[f32; 2]; 3] = [[0.6800, 0.3200], [0.2650, 0.6900], [0.1500, 0.0600]];
+const PRIMARIES_BT2100: [[f32; 2]; 3] = [[0.7080, 0.2920], [0.1700, 0.7970], [0.1310, 0.0460]];
 
 /// Convert a 4-byte big-endian s15Fixed16Number to `f32`.
 ///
@@ -69,8 +66,7 @@ fn xyz_to_xy(xyz: [f32; 3]) -> Option<[f32; 2]> {
 /// Check whether two sets of RGB chromaticity coordinates are close enough.
 pub fn primaries_close(a: &[[f32; 2]; 3], b: &[[f32; 2]; 3]) -> bool {
     a.iter().zip(b.iter()).all(|(a_p, b_p)| {
-        (a_p[0] - b_p[0]).abs() <= MATCH_TOLERANCE
-            && (a_p[1] - b_p[1]).abs() <= MATCH_TOLERANCE
+        (a_p[0] - b_p[0]).abs() <= MATCH_TOLERANCE && (a_p[1] - b_p[1]).abs() <= MATCH_TOLERANCE
     })
 }
 

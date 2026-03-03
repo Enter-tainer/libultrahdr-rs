@@ -113,8 +113,16 @@ mod tests {
 
     #[test]
     fn color_add() {
-        let a = Color { r: 1.0, g: 2.0, b: 3.0 };
-        let b = Color { r: 0.5, g: 0.5, b: 0.5 };
+        let a = Color {
+            r: 1.0,
+            g: 2.0,
+            b: 3.0,
+        };
+        let b = Color {
+            r: 0.5,
+            g: 0.5,
+            b: 0.5,
+        };
         let c = a + b;
         assert!((c.r - 1.5).abs() < 1e-7);
         assert!((c.g - 2.5).abs() < 1e-7);
@@ -123,7 +131,11 @@ mod tests {
 
     #[test]
     fn color_scale() {
-        let a = Color { r: 1.0, g: 2.0, b: 3.0 };
+        let a = Color {
+            r: 1.0,
+            g: 2.0,
+            b: 3.0,
+        };
         let c = a * 2.0;
         assert!((c.r - 2.0).abs() < 1e-7);
         assert!((c.g - 4.0).abs() < 1e-7);
@@ -132,7 +144,11 @@ mod tests {
 
     #[test]
     fn color_clamp() {
-        let c = Color { r: -0.1, g: 0.5, b: 1.5 };
+        let c = Color {
+            r: -0.1,
+            g: 0.5,
+            b: 1.5,
+        };
         let clamped = c.clamp01();
         assert!((clamped.r).abs() < 1e-7);
         assert!((clamped.g - 0.5).abs() < 1e-7);
