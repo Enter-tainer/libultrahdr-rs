@@ -1,3 +1,5 @@
+#![allow(clippy::excessive_precision)]
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
