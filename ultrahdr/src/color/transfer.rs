@@ -198,24 +198,6 @@ impl TransferLuts {
             srgb_inv_u8: &SRGB_INV_OETF_LUT,
         }
     }
-
-    #[inline(always)]
-    pub fn pq_oetf_lookup(&self, e: f32) -> f32 {
-        if e <= 0.0 {
-            return 0.0;
-        }
-        let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
-        self.pq_oetf[idx.min(LUT_SIZE - 1)]
-    }
-
-    #[inline(always)]
-    pub fn hlg_combined_lookup(&self, e: f32) -> f32 {
-        if e <= 0.0 {
-            return 0.0;
-        }
-        let idx = (e * (LUT_SIZE - 1) as f32 + 0.5) as usize;
-        self.hlg_combined[idx.min(LUT_SIZE - 1)]
-    }
 }
 
 // ---------------------------------------------------------------------------

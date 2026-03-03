@@ -449,8 +449,7 @@ fn apply_gainmap_inner(
             return 0.0;
         }
         let idx = (e * scale + 0.5) as usize;
-        // SAFETY: idx.min(max_idx) is always < lut.len() when lut.len() == max_idx + 1.
-        unsafe { *lut.get_unchecked(idx.min(max_idx)) }
+        lut[idx.min(max_idx)]
     }
 
     // Process a single row of pixels. All read-only data is shared by reference.
