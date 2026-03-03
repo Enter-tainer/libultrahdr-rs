@@ -4,7 +4,7 @@ const PQ_C1: f32 = 3424.0 / 4096.0;
 const PQ_C2: f32 = 2413.0 / 4096.0 * 32.0;
 const PQ_C3: f32 = 2392.0 / 4096.0 * 32.0;
 
-/// PQ OETF (SMPTE ST 2084). Maps linear [0,1] to encoded [0,1].
+/// PQ OETF (SMPTE ST 2084). Maps linear \[0,1\] to encoded \[0,1\].
 pub fn pq_oetf(e: f32) -> f32 {
     if e <= 0.0 {
         return 0.0;
@@ -13,7 +13,7 @@ pub fn pq_oetf(e: f32) -> f32 {
     ((PQ_C1 + PQ_C2 * e_m1) / (1.0 + PQ_C3 * e_m1)).powf(PQ_M2)
 }
 
-/// PQ inverse OETF (SMPTE ST 2084). Maps encoded [0,1] to linear [0,1].
+/// PQ inverse OETF (SMPTE ST 2084). Maps encoded \[0,1\] to linear \[0,1\].
 pub fn pq_inv_oetf(e_gamma: f32) -> f32 {
     let val = e_gamma.powf(1.0 / PQ_M2);
     let num = (val - PQ_C1).max(0.0);
@@ -25,7 +25,7 @@ const HLG_A: f32 = 0.17883277;
 const HLG_B: f32 = 0.28466892;
 const HLG_C: f32 = 0.559_910_7;
 
-/// HLG OETF (ITU-R BT.2100). Maps linear [0,1] to encoded [0,1].
+/// HLG OETF (ITU-R BT.2100). Maps linear \[0,1\] to encoded \[0,1\].
 pub fn hlg_oetf(e: f32) -> f32 {
     if e <= 1.0 / 12.0 {
         (3.0 * e).sqrt()
@@ -34,7 +34,7 @@ pub fn hlg_oetf(e: f32) -> f32 {
     }
 }
 
-/// HLG inverse OETF (ITU-R BT.2100). Maps encoded [0,1] to linear [0,1].
+/// HLG inverse OETF (ITU-R BT.2100). Maps encoded \[0,1\] to linear \[0,1\].
 pub fn hlg_inv_oetf(e_gamma: f32) -> f32 {
     if e_gamma <= 0.5 {
         e_gamma * e_gamma / 3.0
@@ -56,7 +56,7 @@ pub fn hlg_inv_ootf_approx(r: f32, g: f32, b: f32) -> [f32; 3] {
     [r.powf(inv_gamma), g.powf(inv_gamma), b.powf(inv_gamma)]
 }
 
-/// sRGB inverse OETF (IEC 61966-2-1). Maps encoded [0,1] to linear [0,1].
+/// sRGB inverse OETF (IEC 61966-2-1). Maps encoded \[0,1\] to linear \[0,1\].
 pub fn srgb_inv_oetf(e_gamma: f32) -> f32 {
     if e_gamma <= 0.04045 {
         e_gamma / 12.92
@@ -65,7 +65,7 @@ pub fn srgb_inv_oetf(e_gamma: f32) -> f32 {
     }
 }
 
-/// sRGB OETF (IEC 61966-2-1). Maps linear [0,1] to encoded [0,1].
+/// sRGB OETF (IEC 61966-2-1). Maps linear \[0,1\] to encoded \[0,1\].
 pub fn srgb_oetf(e: f32) -> f32 {
     if e <= 0.0031308 {
         12.92 * e

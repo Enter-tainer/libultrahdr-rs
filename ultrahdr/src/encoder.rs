@@ -21,6 +21,7 @@ use crate::types::{ColorGamut, ColorTransfer, GainMapMetadata, PixelFormat, SDR_
 /// plus the associated `GainMapMetadata`.
 ///
 /// Port of `JpegR::generateGainMap()` from libultrahdr.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_gainmap(
     sdr_linear: &[f32],
     hdr_linear: &[f32],
@@ -45,8 +46,8 @@ pub fn generate_gainmap(
         return Err(Error::InvalidParam("scale must be >= 1".into()));
     }
 
-    let map_w = (w + scale as usize - 1) / scale as usize;
-    let map_h = (h + scale as usize - 1) / scale as usize;
+    let map_w = w.div_ceil(scale as usize);
+    let map_h = h.div_ceil(scale as usize);
 
     let headroom = target_peak_nits / SDR_WHITE_NITS;
 
@@ -342,8 +343,7 @@ pub fn assemble_ultrahdr(
         let last_seg_end = segments
             .segments
             .iter()
-            .filter(|s| s.marker == 0xE0 || s.marker == 0xE1)
-            .last()
+            .rfind(|s| s.marker == 0xE0 || s.marker == 0xE1)
             .map(|s| s.offset + 2 + 2 + s.data.len()) // marker(2) + length(2) + data
             .unwrap_or(2); // after SOI
         if last_seg_end < sdr_jpeg.len() {
@@ -470,7 +470,7 @@ fn f16_to_f32(val: u16) -> f32 {
             m <<= 1;
             e += 1;
         }
-        let f32_exp = (127 - 15 + 1 - e) as u32;
+        let f32_exp = 127 - 15 + 1 - e;
         let f32_mantissa = (m & 0x3FF) << 13;
         return f32::from_bits((sign << 31) | (f32_exp << 23) | f32_mantissa);
     }
@@ -501,6 +501,12 @@ pub struct Encoder {
     gainmap_scale: u32,
     multichannel: bool,
     target_display_peak_nits: f32,
+}
+
+impl Default for Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Encoder {
@@ -636,10 +642,8 @@ impl Encoder {
         )?;
 
         // Encode gain map as JPEG
-        let map_w = (self.hdr_width as usize + self.gainmap_scale as usize - 1)
-            / self.gainmap_scale as usize;
-        let map_h = (self.hdr_height as usize + self.gainmap_scale as usize - 1)
-            / self.gainmap_scale as usize;
+        let map_w = (self.hdr_width as usize).div_ceil(self.gainmap_scale as usize);
+        let map_h = (self.hdr_height as usize).div_ceil(self.gainmap_scale as usize);
 
         let gainmap_jpeg = if self.multichannel {
             crate::jpeg::encode::encode_rgb_to_jpeg(

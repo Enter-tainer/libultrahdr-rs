@@ -137,13 +137,12 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
     for seg in &segments.segments {
         if seg.marker == 0xE1 && seg.data.len() > XMP_SIG.len() && seg.data.starts_with(XMP_SIG) {
             let xmp_data = &seg.data[XMP_SIG.len()..];
-            if let Ok(xmp_str) = std::str::from_utf8(xmp_data) {
-                if xmp_str.contains("hdrgm") || xmp_str.contains("hdr-gain-map") {
-                    if let Ok(m) = parse_xmp_gainmap_metadata(xmp_data) {
-                        metadata = Some(m);
-                        break;
-                    }
-                }
+            if let Ok(xmp_str) = std::str::from_utf8(xmp_data)
+                && (xmp_str.contains("hdrgm") || xmp_str.contains("hdr-gain-map"))
+                && let Ok(m) = parse_xmp_gainmap_metadata(xmp_data)
+            {
+                metadata = Some(m);
+                break;
             }
         }
     }
@@ -179,13 +178,12 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
                     && seg.data.starts_with(XMP_SIG)
                 {
                     let xmp_data = &seg.data[XMP_SIG.len()..];
-                    if let Ok(xmp_str) = std::str::from_utf8(xmp_data) {
-                        if xmp_str.contains("hdrgm") || xmp_str.contains("hdr-gain-map") {
-                            if let Ok(m) = parse_xmp_gainmap_metadata(xmp_data) {
-                                metadata = Some(m);
-                                break;
-                            }
-                        }
+                    if let Ok(xmp_str) = std::str::from_utf8(xmp_data)
+                        && (xmp_str.contains("hdrgm") || xmp_str.contains("hdr-gain-map"))
+                        && let Ok(m) = parse_xmp_gainmap_metadata(xmp_data)
+                    {
+                        metadata = Some(m);
+                        break;
                     }
                 }
             }
@@ -259,6 +257,7 @@ fn rgb_to_rgba(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
 /// SDR input is expected as RGBA8888 (4 bytes per pixel).
 /// The gain map is single-channel (grayscale) u8 data with dimensions `map_width x map_height`.
 /// Output format is determined by `output_format`.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_gainmap_to_sdr(
     sdr_pixels: &[u8],
     sdr_width: usize,

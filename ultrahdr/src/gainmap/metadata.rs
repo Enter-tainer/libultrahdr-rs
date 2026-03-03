@@ -355,23 +355,19 @@ const HDRGM_NS: &str = "http://ns.adobe.com/hdr-gain-map/1.0/";
 pub fn write_xmp_gainmap_metadata(meta: &GainMapMetadata) -> Result<Vec<u8>> {
     use std::fmt::Write;
     let mut s = String::new();
-    write!(s, "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n").unwrap();
-    write!(s, " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n").unwrap();
-    write!(
-        s,
-        "  <rdf:Description xmlns:hdrgm=\"{HDRGM_NS}\"\n"
-    )
-    .unwrap();
-    write!(s, "   hdrgm:Version=\"1.0\"\n").unwrap();
-    write!(s, "   hdrgm:GainMapMin=\"{}\"\n", meta.min_content_boost[0].log2()).unwrap();
-    write!(s, "   hdrgm:GainMapMax=\"{}\"\n", meta.max_content_boost[0].log2()).unwrap();
-    write!(s, "   hdrgm:Gamma=\"{}\"\n", meta.gamma[0]).unwrap();
-    write!(s, "   hdrgm:OffsetSDR=\"{}\"\n", meta.offset_sdr[0]).unwrap();
-    write!(s, "   hdrgm:OffsetHDR=\"{}\"\n", meta.offset_hdr[0]).unwrap();
-    write!(s, "   hdrgm:HDRCapacityMin=\"{}\"\n", meta.hdr_capacity_min.log2()).unwrap();
-    write!(s, "   hdrgm:HDRCapacityMax=\"{}\"\n", meta.hdr_capacity_max.log2()).unwrap();
-    write!(s, "   hdrgm:BaseRenditionIsHDR=\"False\"/>\n").unwrap();
-    write!(s, " </rdf:RDF>\n").unwrap();
+    writeln!(s, "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">").unwrap();
+    writeln!(s, " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">").unwrap();
+    writeln!(s, "  <rdf:Description xmlns:hdrgm=\"{HDRGM_NS}\"").unwrap();
+    writeln!(s, "   hdrgm:Version=\"1.0\"").unwrap();
+    writeln!(s, "   hdrgm:GainMapMin=\"{}\"", meta.min_content_boost[0].log2()).unwrap();
+    writeln!(s, "   hdrgm:GainMapMax=\"{}\"", meta.max_content_boost[0].log2()).unwrap();
+    writeln!(s, "   hdrgm:Gamma=\"{}\"", meta.gamma[0]).unwrap();
+    writeln!(s, "   hdrgm:OffsetSDR=\"{}\"", meta.offset_sdr[0]).unwrap();
+    writeln!(s, "   hdrgm:OffsetHDR=\"{}\"", meta.offset_hdr[0]).unwrap();
+    writeln!(s, "   hdrgm:HDRCapacityMin=\"{}\"", meta.hdr_capacity_min.log2()).unwrap();
+    writeln!(s, "   hdrgm:HDRCapacityMax=\"{}\"", meta.hdr_capacity_max.log2()).unwrap();
+    writeln!(s, "   hdrgm:BaseRenditionIsHDR=\"False\"/>").unwrap();
+    writeln!(s, " </rdf:RDF>").unwrap();
     write!(s, "</x:xmpmeta>").unwrap();
     Ok(s.into_bytes())
 }

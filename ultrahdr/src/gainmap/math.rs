@@ -221,8 +221,8 @@ mod tests {
     #[test]
     fn encode_gain_clamps_to_u8() {
         let meta = default_test_metadata();
-        let g = encode_gain(0.5, 2.0, &meta, 0);
-        assert!(g <= 255);
+        // encode_gain returns u8, so the value is always in [0, 255]
+        let _g: u8 = encode_gain(0.5, 2.0, &meta, 0);
     }
 
     #[test]
