@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use memchr::memmem;
-use ultrahdr::{CompressedImage, Decoder, Error, GainMapMetadata, sys};
+use ultrahdr::GainMapMetadata;
 
 // Tunable knobs for XMP scanning. Bump these if your XMP lives deeper in the file.
 const XMP_SCAN_LIMIT_BYTES: usize = 256 * 1024;
@@ -164,27 +164,17 @@ fn auto_detect_pair(a: &Path, b: &Path) -> Result<InputPair> {
 }
 
 fn detect_hdr_candidate(path: &Path) -> Result<Option<HdrDetection>> {
-    let mut bytes =
+    let bytes =
         fs::read(path).with_context(|| format!("Failed to read input {}", path.display()))?;
-    let meta = probe_gainmap_metadata(&mut bytes)?;
+    let meta = probe_gainmap_metadata(&bytes)?;
     Ok(meta.map(|_| HdrDetection::ProbeGainMapMetadata))
 }
 
-pub fn probe_gainmap_metadata(buf: &mut [u8]) -> Result<Option<GainMapMetadata>> {
-    let mut dec = Decoder::new()?;
-    let mut comp = CompressedImage::from_bytes(
-        buf,
-        sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
-        sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
-        sys::uhdr_color_range::UHDR_CR_UNSPECIFIED,
-    );
-    dec.set_image(&mut comp)?;
-    match dec.gainmap_metadata() {
+pub fn probe_gainmap_metadata(buf: &[u8]) -> Result<Option<GainMapMetadata>> {
+    let decoder = ultrahdr::decoder::Decoder::new(buf);
+    match decoder.probe() {
         Ok(meta) => Ok(meta),
-        Err(Error {
-            code: sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM,
-            ..
-        }) => {
+        Err(ultrahdr::Error::InvalidParam(_)) => {
             // Not an UltraHDR/gain map JPEG.
             Ok(None)
         }
