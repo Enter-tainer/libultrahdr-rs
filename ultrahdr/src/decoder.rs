@@ -1,9 +1,7 @@
 //! UltraHDR JPEG decoder: extract gain map, apply it, and produce HDR output.
 
 use crate::color::Color;
-use crate::color::transfer::{
-    hlg_inv_ootf_approx_lut, hlg_oetf_lut, pq_oetf_lut, srgb_inv_oetf_lut, srgb_oetf,
-};
+use crate::color::transfer::{hlg_oetf_lut, pq_oetf_lut, srgb_inv_oetf_lut_1024, srgb_oetf};
 use crate::error::{Error, Result};
 use crate::gainmap::math::{GainLut, sample_map_bilinear, sample_map_bilinear_rgb};
 use crate::gainmap::metadata::{
@@ -241,29 +239,31 @@ pub fn extract_gainmap_jpeg(data: &[u8]) -> Result<Option<GainMapExtract>> {
 }
 
 /// Convert f32 to IEEE 754 half-precision (f16) stored as u16.
+///
+/// Matches C++ libultrahdr `floatToHalf` (round-to-nearest with +0x1000 bias).
 fn f32_to_f16(val: f32) -> u16 {
     let bits = val.to_bits();
-    let sign = (bits >> 16) & 0x8000;
-    let exp = ((bits >> 23) & 0xFF) as i32;
-    let mantissa = bits & 0x007F_FFFF;
+    // Round-to-nearest: add last bit after truncated mantissa
+    let b = bits.wrapping_add(0x0000_1000);
 
-    if exp == 255 {
-        // Inf or NaN
-        return (sign | 0x7C00 | if mantissa != 0 { 0x0200 } else { 0 }) as u16;
-    }
+    let e = ((b & 0x7F80_0000) >> 23) as i32; // exponent
+    let m = b & 0x007F_FFFF; // mantissa
 
-    let new_exp = exp - 127 + 15;
-    if new_exp >= 31 {
-        // Overflow to infinity
-        return (sign | 0x7C00) as u16;
-    }
-    if new_exp <= 0 {
-        // Underflow to zero (or subnormal, simplified to zero)
-        return sign as u16;
-    }
+    // sign : normalized : denormalized : saturate
+    let sign = (b & 0x8000_0000) >> 16;
+    let normalized = if e > 112 {
+        ((((e - 112) << 10) as u32) & 0x7C00) | (m >> 13)
+    } else {
+        0
+    };
+    let denormalized = if e < 113 && e > 101 {
+        (((0x007F_F000 + m) >> (125 - e)) + 1) >> 1
+    } else {
+        0
+    };
+    let saturate = if e > 143 { 0x7FFFu32 } else { 0 };
 
-    let half_mantissa = mantissa >> 13;
-    (sign | ((new_exp as u32) << 10) | half_mantissa) as u16
+    (sign | normalized | denormalized | saturate) as u16
 }
 
 /// Convert RGB pixel buffer to RGBA by adding alpha=255.
@@ -367,10 +367,10 @@ pub fn apply_gainmap_to_sdr(
             let b_u8 = sdr_pixels[px_idx + 2];
             let a_u8 = sdr_pixels[px_idx + 3];
 
-            // Convert SDR to linear (LUT: exact for u8 inputs)
-            let r_lin = srgb_inv_oetf_lut(r_u8);
-            let g_lin = srgb_inv_oetf_lut(g_u8);
-            let b_lin = srgb_inv_oetf_lut(b_u8);
+            // Convert SDR to linear via 1024-entry LUT (matches C++ srgbInvOetfLUT)
+            let r_lin = srgb_inv_oetf_lut_1024(r_u8 as f32 / 255.0);
+            let g_lin = srgb_inv_oetf_lut_1024(g_u8 as f32 / 255.0);
+            let b_lin = srgb_inv_oetf_lut_1024(b_u8 as f32 / 255.0);
             let sdr_color = Color::new(r_lin, g_lin, b_lin);
 
             // Sample gain map and apply gain via LUT.
@@ -431,13 +431,15 @@ pub fn apply_gainmap_to_sdr(
                     (pq_oetf_lut(r), pq_oetf_lut(g), pq_oetf_lut(b))
                 }
                 ColorTransfer::Hlg => {
+                    // C++ uses direct powf (hlgInverseOotfApprox), not LUT
+                    const INV_OOTF_GAMMA: f32 = 1.0 / 1.2;
                     let r = (hdr_color.r * HLG_SCALE).clamp(0.0, 1.0);
                     let g = (hdr_color.g * HLG_SCALE).clamp(0.0, 1.0);
                     let b = (hdr_color.b * HLG_SCALE).clamp(0.0, 1.0);
                     (
-                        hlg_oetf_lut(hlg_inv_ootf_approx_lut(r)),
-                        hlg_oetf_lut(hlg_inv_ootf_approx_lut(g)),
-                        hlg_oetf_lut(hlg_inv_ootf_approx_lut(b)),
+                        hlg_oetf_lut(r.powf(INV_OOTF_GAMMA)),
+                        hlg_oetf_lut(g.powf(INV_OOTF_GAMMA)),
+                        hlg_oetf_lut(b.powf(INV_OOTF_GAMMA)),
                     )
                 }
             };
