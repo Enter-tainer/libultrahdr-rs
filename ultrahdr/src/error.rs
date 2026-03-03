@@ -1,63 +1,54 @@
-use crate::sys;
-use std::error::Error as StdError;
-use std::ffi::CStr;
 use std::fmt;
 
-/// Error produced by the safe wrappers around `libultrahdr`.
-#[derive(Debug, Clone)]
-pub struct Error {
-    /// Error code returned by `libultrahdr`.
-    pub code: sys::uhdr_codec_err_t,
-    /// Optional human-readable detail string when provided by the library.
-    pub detail: Option<String>,
+/// Errors produced by the ultrahdr crate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Error {
+    /// Invalid parameter passed to an API function.
+    InvalidParam(String),
+    /// A codec operation failed.
+    CodecError(String),
+    /// Memory allocation failed.
+    MemError(String),
+    /// Feature not supported.
+    UnsupportedFeature(String),
+    /// JPEG encoding/decoding error.
+    JpegError(String),
+    /// Metadata parsing error.
+    MetadataError(String),
 }
 
 /// Result alias used throughout the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl Error {
-    pub(crate) fn alloc() -> Self {
-        Self {
-            code: sys::uhdr_codec_err_t::UHDR_CODEC_MEM_ERROR,
-            detail: Some("allocation failed".to_string()),
-        }
-    }
-
-    pub(crate) fn invalid_param(msg: impl Into<String>) -> Self {
-        Self {
-            code: sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_PARAM,
-            detail: Some(msg.into()),
-        }
-    }
-}
-
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(detail) = &self.detail {
-            write!(f, "{:?}: {}", self.code, detail)
-        } else {
-            write!(f, "{:?}", self.code)
+        match self {
+            Error::InvalidParam(msg) => write!(f, "invalid parameter: {msg}"),
+            Error::CodecError(msg) => write!(f, "codec error: {msg}"),
+            Error::MemError(msg) => write!(f, "memory error: {msg}"),
+            Error::UnsupportedFeature(msg) => write!(f, "unsupported feature: {msg}"),
+            Error::JpegError(msg) => write!(f, "JPEG error: {msg}"),
+            Error::MetadataError(msg) => write!(f, "metadata error: {msg}"),
         }
     }
 }
 
-impl StdError for Error {}
+impl std::error::Error for Error {}
 
-pub(crate) fn check(info: sys::uhdr_error_info_t) -> Result<()> {
-    if info.error_code == sys::uhdr_codec_err_t::UHDR_CODEC_OK {
-        return Ok(());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_display_includes_message() {
+        let e = Error::InvalidParam("bad width".into());
+        let msg = format!("{e}");
+        assert!(msg.contains("bad width"));
     }
-    let detail = if info.has_detail != 0 && info.detail[0] != 0 {
-        // SAFETY: detail is a char buffer owned by the struct and expected to be null-terminated.
-        let s = unsafe { CStr::from_ptr(info.detail.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        if s.is_empty() { None } else { Some(s) }
-    } else {
-        None
-    };
-    Err(Error {
-        code: info.error_code,
-        detail,
-    })
+
+    #[test]
+    fn error_implements_std_error() {
+        let e: Box<dyn std::error::Error> = Box::new(Error::InvalidParam("test".into()));
+        assert!(e.to_string().contains("test"));
+    }
 }

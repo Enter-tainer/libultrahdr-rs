@@ -6,27 +6,16 @@ license.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
-description = "Safe-ish Rust wrapper around libultrahdr"
-exclude = [
-  "/target",
-  "/CMakeFiles",
-  "/artifacts",
-]
+keywords = ["hdr", "jpeg", "gainmap", "image"]
+categories = ["multimedia::images"]
+description = "Pure Rust UltraHDR gain-map JPEG encoder/decoder"
+exclude = ["/target", "/artifacts"]
 
 [features]
-default = ["vendored", "iso21496"]
-vendored = ["ultrahdr-sys/vendored"]
-shared = ["ultrahdr-sys/shared"]
-gles = ["ultrahdr-sys/gles"]
-iso21496 = ["ultrahdr-sys/iso21496"]
-no-threads = ["ultrahdr-sys/no-threads"]
-jpeg-max-dimension = ["ultrahdr-sys/jpeg-max-dimension"]
+default = []
 
 [dependencies]
-ultrahdr-sys = { workspace = true }
+thiserror = "2"
 
 [dev-dependencies]
 anyhow.workspace = true
-clap.workspace = true
