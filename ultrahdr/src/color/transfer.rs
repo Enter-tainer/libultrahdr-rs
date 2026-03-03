@@ -158,6 +158,66 @@ pub fn hlg_inv_ootf_approx_lut(e: f32) -> f32 {
     HLG_INV_OOTF_LUT[idx.min(LUT_SIZE - 1)]
 }
 
+// ---------------------------------------------------------------------------
+// C++-matching inverse OETF LUTs (for gain map generation)
+// These match the exact LUT sizes and lookup logic used in C++ libultrahdr's
+// srgbInvOetfLUT, hlgInvOetfLUT, and pqInvOetfLUT functions.
+// ---------------------------------------------------------------------------
+
+const SRGB_INV_OETF_LUT_SIZE: usize = 1024; // 1 << 10, matches C++ kSrgbInvOETFNumEntries
+
+static SRGB_INV_OETF_LUT_1024: LazyLock<[f32; 1024]> = LazyLock::new(|| {
+    let mut lut = [0.0f32; 1024];
+    for (i, val) in lut.iter_mut().enumerate() {
+        *val = srgb_inv_oetf(i as f32 / (SRGB_INV_OETF_LUT_SIZE - 1) as f32);
+    }
+    lut
+});
+
+/// sRGB inverse OETF via 1024-entry LUT matching C++ libultrahdr.
+#[inline(always)]
+pub fn srgb_inv_oetf_lut_1024(e_gamma: f32) -> f32 {
+    let idx = (e_gamma * (SRGB_INV_OETF_LUT_SIZE - 1) as f32 + 0.5) as i32;
+    let idx = idx.clamp(0, (SRGB_INV_OETF_LUT_SIZE - 1) as i32) as usize;
+    SRGB_INV_OETF_LUT_1024[idx]
+}
+
+const HLG_INV_OETF_LUT_SIZE: usize = 4096; // 1 << 12, matches C++ kHlgInvOETFNumEntries
+
+static HLG_INV_OETF_LUT_4096: LazyLock<[f32; 4096]> = LazyLock::new(|| {
+    let mut lut = [0.0f32; 4096];
+    for (i, val) in lut.iter_mut().enumerate() {
+        *val = hlg_inv_oetf(i as f32 / (HLG_INV_OETF_LUT_SIZE - 1) as f32);
+    }
+    lut
+});
+
+/// HLG inverse OETF via 4096-entry LUT matching C++ libultrahdr.
+#[inline(always)]
+pub fn hlg_inv_oetf_lut_4096(e_gamma: f32) -> f32 {
+    let idx = (e_gamma * (HLG_INV_OETF_LUT_SIZE - 1) as f32 + 0.5) as i32;
+    let idx = idx.clamp(0, (HLG_INV_OETF_LUT_SIZE - 1) as i32) as usize;
+    HLG_INV_OETF_LUT_4096[idx]
+}
+
+const PQ_INV_OETF_LUT_SIZE: usize = 4096; // 1 << 12, matches C++ kPqInvOETFNumEntries
+
+static PQ_INV_OETF_LUT_4096: LazyLock<[f32; 4096]> = LazyLock::new(|| {
+    let mut lut = [0.0f32; 4096];
+    for (i, val) in lut.iter_mut().enumerate() {
+        *val = pq_inv_oetf(i as f32 / (PQ_INV_OETF_LUT_SIZE - 1) as f32);
+    }
+    lut
+});
+
+/// PQ inverse OETF via 4096-entry LUT matching C++ libultrahdr.
+#[inline(always)]
+pub fn pq_inv_oetf_lut_4096(e_gamma: f32) -> f32 {
+    let idx = (e_gamma * (PQ_INV_OETF_LUT_SIZE - 1) as f32 + 0.5) as i32;
+    let idx = idx.clamp(0, (PQ_INV_OETF_LUT_SIZE - 1) as i32) as usize;
+    PQ_INV_OETF_LUT_4096[idx]
+}
+
 /// Reference display peak brightness in nits for a given transfer function.
 pub fn reference_display_peak_nits(transfer: ColorTransfer) -> f32 {
     match transfer {
@@ -256,5 +316,58 @@ mod tests {
     fn reference_display_peak_srgb() {
         use crate::types::ColorTransfer;
         assert!((reference_display_peak_nits(ColorTransfer::Srgb) - 203.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn srgb_inv_oetf_lut_1024_differs_from_direct() {
+        // LUT quantizes input to 1024 entries, so result differs from direct computation
+        let val = 0.5;
+        let direct = srgb_inv_oetf(val);
+        let lut = srgb_inv_oetf_lut_1024(val);
+        // Both should be close but not identical due to quantization
+        assert!(
+            (direct - lut).abs() < 0.01,
+            "LUT and direct should be close: direct={direct}, lut={lut}"
+        );
+    }
+
+    #[test]
+    fn hlg_inv_oetf_lut_4096_differs_from_direct() {
+        let val = 0.7;
+        let direct = hlg_inv_oetf(val);
+        let lut = hlg_inv_oetf_lut_4096(val);
+        assert!(
+            (direct - lut).abs() < 0.001,
+            "HLG LUT and direct should be close: direct={direct}, lut={lut}"
+        );
+    }
+
+    #[test]
+    fn pq_inv_oetf_lut_4096_differs_from_direct() {
+        let val = 0.5;
+        let direct = pq_inv_oetf(val);
+        let lut = pq_inv_oetf_lut_4096(val);
+        assert!(
+            (direct - lut).abs() < 0.001,
+            "PQ LUT and direct should be close: direct={direct}, lut={lut}"
+        );
+    }
+
+    #[test]
+    fn srgb_inv_oetf_lut_1024_boundary_values() {
+        // Test boundary: 0.0 and 1.0 should match exactly
+        assert_eq!(srgb_inv_oetf_lut_1024(0.0), srgb_inv_oetf(0.0));
+        assert_eq!(srgb_inv_oetf_lut_1024(1.0), srgb_inv_oetf(1.0));
+    }
+
+    #[test]
+    fn lut_clamps_out_of_range() {
+        // Negative and >1.0 inputs should be clamped
+        let _ = srgb_inv_oetf_lut_1024(-0.1); // should not panic
+        let _ = srgb_inv_oetf_lut_1024(1.5); // should not panic
+        let _ = hlg_inv_oetf_lut_4096(-0.1);
+        let _ = hlg_inv_oetf_lut_4096(1.5);
+        let _ = pq_inv_oetf_lut_4096(-0.1);
+        let _ = pq_inv_oetf_lut_4096(1.5);
     }
 }

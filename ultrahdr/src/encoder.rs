@@ -3,8 +3,8 @@
 use crate::color::Color;
 use crate::color::gamut::gamut_convert;
 use crate::color::transfer::{
-    hlg_inv_oetf, hlg_ootf_approx, pq_inv_oetf, reference_display_peak_nits, srgb_inv_oetf,
-    srgb_oetf,
+    hlg_inv_oetf, hlg_inv_oetf_lut_4096, hlg_ootf_approx, pq_inv_oetf, pq_inv_oetf_lut_4096,
+    reference_display_peak_nits, srgb_inv_oetf, srgb_inv_oetf_lut_1024, srgb_oetf,
 };
 use crate::error::{Error, Result};
 use crate::gainmap::math::{compute_gain, global_tonemap};
@@ -112,29 +112,29 @@ pub fn generate_gainmap(
             let hdr_g_avg = hdr_g * inv;
             let hdr_b_avg = hdr_b * inv;
 
-            // Linearize SDR (always sRGB).
-            let mut sdr_r = srgb_inv_oetf(sdr_r_avg);
-            let mut sdr_g = srgb_inv_oetf(sdr_g_avg);
-            let mut sdr_b = srgb_inv_oetf(sdr_b_avg);
+            // Linearize SDR (always sRGB) using C++-matching 1024-entry LUT.
+            let mut sdr_r = srgb_inv_oetf_lut_1024(sdr_r_avg);
+            let mut sdr_g = srgb_inv_oetf_lut_1024(sdr_g_avg);
+            let mut sdr_b = srgb_inv_oetf_lut_1024(sdr_b_avg);
 
-            // Linearize HDR based on transfer function.
+            // Linearize HDR based on transfer function using C++-matching LUTs.
             let (mut hdr_r, mut hdr_g, mut hdr_b) = match hdr_transfer {
                 ColorTransfer::Hlg => {
-                    let r = hlg_inv_oetf(hdr_r_avg);
-                    let g = hlg_inv_oetf(hdr_g_avg);
-                    let b = hlg_inv_oetf(hdr_b_avg);
+                    let r = hlg_inv_oetf_lut_4096(hdr_r_avg);
+                    let g = hlg_inv_oetf_lut_4096(hdr_g_avg);
+                    let b = hlg_inv_oetf_lut_4096(hdr_b_avg);
                     let [r, g, b] = hlg_ootf_approx(r, g, b);
                     (r, g, b)
                 }
                 ColorTransfer::Pq => (
-                    pq_inv_oetf(hdr_r_avg),
-                    pq_inv_oetf(hdr_g_avg),
-                    pq_inv_oetf(hdr_b_avg),
+                    pq_inv_oetf_lut_4096(hdr_r_avg),
+                    pq_inv_oetf_lut_4096(hdr_g_avg),
+                    pq_inv_oetf_lut_4096(hdr_b_avg),
                 ),
                 ColorTransfer::Linear | ColorTransfer::Srgb => (
-                    srgb_inv_oetf(hdr_r_avg),
-                    srgb_inv_oetf(hdr_g_avg),
-                    srgb_inv_oetf(hdr_b_avg),
+                    srgb_inv_oetf_lut_1024(hdr_r_avg),
+                    srgb_inv_oetf_lut_1024(hdr_g_avg),
+                    srgb_inv_oetf_lut_1024(hdr_b_avg),
                 ),
             };
 
