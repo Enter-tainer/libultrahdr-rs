@@ -1,60 +1,62 @@
-# GOAL: Rust Encoder Bit-Exact with C++ libultrahdr
+# GOAL: Bit-Exact Tests + Decode Performance Optimization
 
 ## Background
 
-The Rust UltraHDR encoder (`ultrahdr/src/encoder.rs`) produces gain map metadata and
-JPEG output that differs from the C++ libultrahdr reference implementation. As a result:
+The Rust UltraHDR encoder is now metadata-aligned with C++ libultrahdr (LUT-based inverse
+OETF, correct offsets, gain clamping, etc.). Current status:
+- Encoder metadata: bit-exact match with C++ on gradient/white scenarios
+- Cross-decode: works (Rust→C++ and C++→Rust)
+- Encode performance: on par with C++ (0.98x at 512x512)
+- Decode performance: 2.4x slower than C++ (24.3ms vs 10.0ms at 512x512)
 
-1. HDR effect doesn't trigger properly ("亮不起来")
-2. C++ decoder cannot decode Rust encoder output (cross-decode fails)
-3. Gain map pixel distribution is significantly different
-
-The pure Rust rewrite (PR #6) is functionally complete for decode, but the encoder has
-critical metadata and computation differences that must be fixed.
+Existing tests use PSNR thresholds (20-55 dB) against golden data files, but do NOT
+verify strict bit-exact match by calling both Rust and C++ at runtime.
 
 ## Objective
 
-Make the Rust encoder produce output that is **functionally equivalent** to the C++
-`generateGainMapTwoPass()` code path (BEST_QUALITY preset), so that:
+### Part 1: Strict Bit-Exact Test Suite
 
-- C++ can successfully decode Rust-encoded UltraHDR JPEGs
-- Metadata values (offset, content_boost, use_base_cg) match C++
-- Gain map pixel distribution matches C++
+Add integration tests that call both Rust and C++ (via ultrahdr-sys FFI) at runtime
+and compare output pixel-by-pixel:
 
-## Identified Differences
+**Encoder bit-exact tests:**
+- Same synthetic input → encode with Rust and C++ → compare:
+  - Gain map metadata values (exact float match)
+  - Gain map pixel bytes (extract + decompress, byte-by-byte)
+- Scenarios: gradient, solid white, solid black, color ramps, mixed bright/dark
 
-### P1 — Blocks cross-decode
+**Decoder bit-exact tests:**
+- Same UltraHDR JPEG → decode with Rust and C++ → compare decoded pixels byte-by-byte
+- Test with both Rust-encoded and C++-encoded JPEGs
+- Output formats: RGBA1010102 (HLG), RGBA1010102 (PQ), RgbaF16 (Linear)
+- Report max pixel diff and count of differing pixels
 
-| Issue | C++ (two-pass) | Rust | Impact |
-|-------|----------------|------|--------|
-| offset_sdr/hdr | `1e-7` (kSdrOffset/kHdrOffset) | `1/64 = 0.015625` | 156K× wrong offset in decoder formula |
-| use_base_cg | `false` (for raw input API-0/API-1) | `true` (hardcoded) | Gamut conversion mismatch |
+### Part 2: Decode Performance Optimization
 
-### P2 — Affects gain map accuracy
+Optimize Rust decode to match C++ speed (~10ms at 512x512) while maintaining bit-exact
+output. Primary bottleneck is likely JPEG decode (`jpeg-decoder` vs `libjpeg-turbo`).
 
-| Issue | C++ (two-pass) | Rust | Impact |
-|-------|----------------|------|--------|
-| min/max gain clamp | `clamp(-14.3, 15.6)` | `max(0).min(headroom.log2())` | Rust min_boost=2.52 vs C++=0.091 |
-| Zero-range epsilon | `max += 0.1` | `max += 1e-6` | Minor quantization diff |
-
-### P3 — May affect JPEG structure compatibility
-
-| Issue | C++ | Rust | Impact |
-|-------|-----|------|--------|
-| Secondary image metadata | Has XMP + ISO in gain map JPEG | May be incomplete | C++ decoder may reject |
+Candidate optimizations (in priority order):
+1. Replace `jpeg-decoder` with faster alternative (e.g. `zune-jpeg` feature flag)
+2. Eliminate `rgb_to_rgba` allocation (decode directly to RGBA or use in-place)
+3. Optimize `apply_gainmap_to_sdr` hot loops (SIMD-friendly patterns, reduce branching)
+4. Enable `rayon` parallelism for gain map application
 
 ## Constraints
 
-- Must match C++ `generateGainMapTwoPass()` path (BEST_QUALITY preset)
-- `compute_gain()` formula already correct (log2 with 1e-7 epsilon) — no change needed
-- Decoder (`apply_gain_single/multi`) already correct — no change needed
-- No new public API changes — only internal encoder behavior fixes
-- All existing tests must continue to pass
+- All existing 78+ tests must continue to pass
+- No new unsafe code in the main library
+- Performance optimizations must not change output (bit-exact preservation)
+- New faster JPEG decoder should be behind an optional feature flag
+- `cargo clippy --all-targets -- -D warnings` clean
+- `cargo fmt --check` clean
 
 ## Success Criteria
 
-1. **Cross-decode works**: `debug_encode` test shows Rust→C++ decode succeeds (not FAILED)
-2. **Metadata matches**: offset_sdr ≈ 1e-7, offset_hdr ≈ 1e-7, use_base_cg = false — all match C++
-3. **Gain map distribution**: gradient scenario mean within ±10 of C++ value (167.38)
-4. **min_content_boost**: gradient scenario value < 1.0 (matching C++ allowing gain < 1)
-5. **All tests pass**: `cargo test` green, `cargo clippy --all-targets -- -D warnings` clean, `cargo fmt --check` clean
+1. **Encoder bit-exact**: At least 5 scenarios where Rust and C++ gain map metadata
+   match exactly (float equality) and gain map pixels match byte-for-byte
+2. **Decoder bit-exact**: For each tested JPEG, Rust and C++ decoded pixels are
+   identical (0 differing pixels) across HLG, PQ, and Linear output modes
+3. **Decode performance**: Rust decode within 1.5x of C++ speed (target: <15ms at 512x512)
+4. **All tests pass**: `cargo test` green (including new bit-exact tests)
+5. **CI clean**: clippy + fmt pass
