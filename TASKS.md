@@ -1,89 +1,110 @@
-# pulp SIMD Optimization 实现计划
+# Byte-Exact Metadata 实现计划
 
 > **For Claude:** 必须使用 superpowers:executing-plans skill 按任务逐一实现本计划。
 
-**目标：** 用 pulp crate 对 apply_gainmap_inner 的算术部分做 SIMD 向量化
+**目标：** 使 Rust encoder 输出的 metadata segments (XMP, ISO, MPF) 与 C++ 字节级一致
 
-**架构：** 将 process_row 重构为两遍处理：第一遍标量填充 SoA 缓冲区（LUT 查找 + gain sampling），第二遍用 pulp SIMD 批量处理算术运算。Feature-gated behind `simd` feature flag。
+**架构：** 修改 `encoder.rs` (XMP+assembly), `gainmap/metadata.rs` (fraction conversion), 新增 `bitexact.rs` 对比测试
 
-**技术栈：** pulp 0.22, Rust stable, optional feature flag
-
----
-
-### 任务 1：添加 pulp 依赖和 feature flag
-
-**文件：**
-- 修改：`ultrahdr/Cargo.toml`
-
-**步骤 1：修改 Cargo.toml**
-
-在 `[features]` 添加 `simd = ["dep:pulp"]`，在 `[dependencies]` 添加 `pulp = { version = "0.22", optional = true }`
-
-**步骤 2：验证编译**
-
-运行：`CARGO_HOME=/tmp/cargo-home cargo build -p ultrahdr --features simd`
-
-**步骤 3：提交**
+**技术栈：** Rust, cargo test, ultrahdr-sys FFI
 
 ---
 
-### 任务 2：创建 SIMD 内核模块
+## 关键发现
 
-**文件：**
-- 创建：`ultrahdr/src/simd.rs`
-- 修改：`ultrahdr/src/lib.rs`（添加 `#[cfg(feature = "simd")] mod simd;`）
-
-核心函数：
-
-1. `apply_gain_simd(r_lin, g_lin, b_lin, factor_r, factor_g, factor_b, offset_sdr, offset_hdr, hdr_r, hdr_g, hdr_b)` — 用 pulp WithSimd 实现 `(lin + offset_sdr) * factor - offset_hdr`，按通道处理，head/tail 分离
-2. `clamp_simd(data, min, max)` — 用 pulp 的 min_f32s/max_f32s 批量 clamp
-
-测试：在 simd.rs 底部写 3 个单元测试验证 SIMD == scalar（用非对齐长度如 n=37 测试 tail 处理）
+| 差异 | C++ | Rust | 严重度 |
+|------|-----|------|--------|
+| Primary XMP | Container directory (列出 primary+gainmap) | Gainmap metadata (错误位置!) | P0 |
+| Secondary XMP | Gainmap metadata 值 | 无 | P0 |
+| Float→Fraction | Continued fractions (最优有理逼近) | 固定 denom=10000 + truncation | P1 |
+| XMP 格式 | XmlWriter (带缩进、xmlns、x:xmptk) | 手动 string format | P1 |
+| Secondary segment | SOI→XMP APP1→ISO APP2→rest | SOI→ISO APP2→rest (无 XMP) | P0 |
 
 ---
 
-### 任务 3：将 SIMD 集成到 apply_gainmap_inner
+### Task 1: 添加 metadata 字节对比诊断测试
 
-**文件：**
-- 修改：`ultrahdr/src/decoder.rs:348-632`
-- 修改：`ultrahdr/src/gainmap/math.rs`（GainLut 添加 pub accessor）
-- 创建：`ultrahdr/tests/simd_equivalence.rs`
+**文件:** `ultrahdr/tests/bitexact.rs`
 
-**关键修改：**
+**目的:** 新增测试，对同一 input 用 Rust 和 C++ encode，提取并对比所有 metadata segments 的原始字节。诊断测试，先看清所有差异。
 
-1. `GainLut` 添加公开方法：`pub fn gain_factor_pub(&self, gain: f32, ch: usize) -> f32`、`pub fn offset_sdr(&self) -> [f32; 3]`、`pub fn offset_hdr(&self) -> [f32; 3]`
+需要实现辅助函数来解析 JPEG segments，提取 XMP APP1、ISO APP2、MPF APP2。对比 primary 和 secondary 中的所有 metadata。
 
-2. `process_row` 闭包用 `#[cfg(feature = "simd")]` 分支：
-   - Pass 1 (标量): 遍历行内所有像素，填充 SoA 缓冲区：r_lin_buf, g_lin_buf, b_lin_buf, a_buf, factor_r_buf, factor_g_buf, factor_b_buf。sRGB LUT、gain sampling、gain factor LUT 全部标量。
-   - Pass 2 (SIMD): `apply_gain_simd()` 批量计算 `(lin + offset) * factor - offset`
-   - Pass 3: transfer function — Linear 用 `clamp_simd()`，PQ/HLG 标量 LUT，sRGB 标量
-   - Pass 4: output format conversion — 标量写出（Rgba8888/1010102/F16）
-   - `#[cfg(not(feature = "simd"))]` 保留原始标量路径不变
+**验证:** `CARGO_HOME=/tmp/cargo-home cargo test -p ultrahdr --test bitexact metadata_bytes_diagnostic -- --nocapture`
 
-3. `Arch::new()` 在 process_row 外调用一次，通过闭包捕获传入
+**期望:** 测试失败但输出详细差异。
 
-4. simd_equivalence.rs：端到端测试，用 64x64 gradient 图片，验证所有 transfer×format 组合输出确定性
-
-**注意：** vec 分配每行 7 × width × 4 bytes ≈ 14KB (512 宽)，L1 缓存内。
+**agent_id:** meta-exact
 
 ---
 
-### 任务 4：性能验证和收尾
+### Task 2: 修复 XMP 结构
 
-**步骤：**
+**文件:**
+- `ultrahdr/src/gainmap/metadata.rs` — 新增 `write_xmp_primary_container(secondary_image_size, metadata_version)`
+- `ultrahdr/src/encoder.rs` — `assemble_ultrahdr()` 中 primary 用 container XMP, secondary 插入 gainmap metadata XMP
 
-1. 运行 decode_profile（无 simd）和（有 simd），对比 apply_gainmap 时间
-2. 运行全量测试：`cargo test -p ultrahdr --features simd,rayon`
-3. 运行 bit_exact 测试：`cargo test --release --features simd,rayon --test bit_exact -- --ignored`
-4. clippy + fmt 检查
-5. 最终提交，汇报性能对比结果
+**关键变更:**
+
+1. **Primary XMP** → Container directory，参考 C++ `generateXmpForPrimaryImage()` (jpegrutils.cpp:636-673):
+   - `x:xmpmeta` 包含 `x:xmptk="Adobe XMP Core 5.1.2"`
+   - `rdf:RDF` → `rdf:Description` 带 xmlns for Container, Item, hdrgm
+   - `Container:Directory` → `rdf:Seq` → 两个 `rdf:li` (Primary + GainMap)
+   - GainMap item 有 `Item:Length` = secondary_image_size
+
+2. **Secondary XMP** → Gainmap metadata，参考 C++ `generateXmpForSecondaryImage()` (jpegrutils.cpp:675-699):
+   - 包含 `x:xmptk="Adobe XMP Core 5.1.2"`
+   - hdrgm:Version, GainMapMin, GainMapMax, Gamma, OffsetSDR, OffsetHDR, HDRCapacityMin, HDRCapacityMax, BaseRenditionIsHDR
+   - 用 C++ 的 XmlWriter 生成格式（或精确匹配其输出）
+
+3. **Assembly** 修改:
+   - Primary: 插入 container XMP APP1
+   - Secondary: SOI → XMP APP1 (gainmap metadata) → ISO APP2 (full) → rest of JPEG
+
+**验证:** 重新运行 Task 1 诊断测试
+
+**agent_id:** meta-exact
 
 ---
 
-### 关键注意事项
+### Task 3: 修复 float→fraction — continued fractions 算法
 
-- **bit-exact 保证**：IEEE 754 下 f32 的 add/mul/sub 是确定性的，SIMD 与标量结果完全一致
-- **Arch::new()** 行循环外调用一次，避免每行重检测 CPU
-- **gain sampling** 保持标量（bilinear/IDW 数据依赖访问无法向量化）
-- **LUT 查找** 保持标量（pulp 不暴露 gather）
-- 预期收益保守 1.2-1.3x（SIMD 只覆盖算术部分约 30%）
+**文件:**
+- `ultrahdr/src/gainmap/metadata.rs` — 新增 `float_to_unsigned_fraction()`, `float_to_signed_fraction()`
+- `ultrahdr/src/encoder.rs` — `metadata_to_frac()` 使用新函数
+
+**关键变更:**
+
+移植 C++ `floatToUnsignedFractionImpl()` (gainmapmath.cpp:1626-1680):
+- 使用 continued fractions 找最优有理逼近
+- maxNumerator = UINT32_MAX (unsigned) / INT32_MAX (signed)
+- 处理负数：取绝对值转换后恢复符号
+
+修改 `metadata_to_frac()` 不再用固定 denom=10000，每个字段调用 continued fractions。
+
+**验证:** ISO binary metadata 字节匹配 C++
+
+**agent_id:** meta-exact
+
+---
+
+### Task 4: 验证 MPF、segment 顺序、最终对比
+
+**文件:** `ultrahdr/src/encoder.rs` (如需调整)
+
+**检查项:**
+1. MPF 字节对比
+2. APP segment 顺序: EXIF APP1 → XMP APP1 → ISO APP2 stub → ICC APP2 → MPF APP2
+3. Secondary 顺序: SOI → XMP APP1 → ISO APP2 full → rest
+
+**验证:**
+```bash
+cargo fmt -p ultrahdr -- --check
+cargo clippy -p ultrahdr --all-targets -- -D warnings
+cargo test -p ultrahdr
+CARGO_HOME=/tmp/cargo-home cargo test -p ultrahdr --test bitexact -- --nocapture
+```
+
+**期望:** 所有测试通过，metadata 字节对比零差异（uniform-RGB 场景）
+
+**agent_id:** meta-exact
