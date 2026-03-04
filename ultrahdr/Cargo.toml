@@ -12,7 +12,7 @@ description = "Pure Rust UltraHDR gain-map JPEG encoder/decoder"
 exclude = ["/target", "/artifacts"]
 
 [features]
-default = []
+default = ["simd"]
 rayon = ["dep:rayon"]
 simd = ["dep:pulp"]
 zune-jpeg = ["dep:zune-jpeg", "dep:zune-core"]
