@@ -13,5 +13,8 @@ pub mod jpeg;
 pub mod mpf;
 pub mod types;
 
+#[cfg(feature = "simd")]
+pub(crate) mod simd;
+
 pub use error::{Error, Result};
 pub use types::*;
