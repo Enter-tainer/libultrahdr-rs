@@ -1114,35 +1114,55 @@ fn metadata_bytes_diagnostic() {
         );
     }
 
-    // Match segments by label and compare
+    // Match segments by label and compare.
+    // "Controlled" metadata = segments we assemble (ISO-21496-1, XMP, EXIF).
+    // "JPEG-encoder" segments = ICC, COM, etc. — come from the underlying JPEG
+    // encoder (mozjpeg vs libjpeg-turbo) and are not expected to match.
+    // MPF structure matches but offsets differ when primary sizes differ (e.g. due to ICC).
     println!("\n  Primary segment comparison:");
-    let metadata_labels = ["XMP", "ISO-21496-1", "MPF", "ICC", "EXIF"];
+    let controlled_labels = ["XMP", "ISO-21496-1", "EXIF"];
+    let informational_labels = ["MPF", "ICC"];
     let mut any_primary_diff = false;
 
-    for target_label in &metadata_labels {
+    for target_label in controlled_labels.iter().chain(informational_labels.iter()) {
         let rust_seg = rust_primary_segs.iter().find(|s| s.label == *target_label);
         let cpp_seg = cpp_primary_segs.iter().find(|s| s.label == *target_label);
+        let is_controlled = controlled_labels.contains(target_label);
 
         match (rust_seg, cpp_seg) {
             (Some(rs), Some(cs)) => {
                 compare_segment_bytes("primary", target_label, &rs.payload, &cs.payload);
-                if rs.payload != cs.payload {
+                if rs.payload != cs.payload && is_controlled {
                     any_primary_diff = true;
                 }
             }
             (Some(rs), None) => {
                 println!(
-                    "  [primary] {target_label}: ONLY IN RUST ({} bytes)",
-                    rs.payload.len()
+                    "  [primary] {target_label}: ONLY IN RUST ({} bytes){}",
+                    rs.payload.len(),
+                    if !is_controlled {
+                        " (jpeg-encoder)"
+                    } else {
+                        ""
+                    }
                 );
-                any_primary_diff = true;
+                if is_controlled {
+                    any_primary_diff = true;
+                }
             }
             (None, Some(cs)) => {
                 println!(
-                    "  [primary] {target_label}: ONLY IN C++ ({} bytes)",
-                    cs.payload.len()
+                    "  [primary] {target_label}: ONLY IN C++ ({} bytes){}",
+                    cs.payload.len(),
+                    if !is_controlled {
+                        " (jpeg-encoder)"
+                    } else {
+                        ""
+                    }
                 );
-                any_primary_diff = true;
+                if is_controlled {
+                    any_primary_diff = true;
+                }
             }
             (None, None) => {}
         }
@@ -1223,30 +1243,45 @@ fn metadata_bytes_diagnostic() {
             }
 
             println!("\n  Secondary segment comparison:");
-            for target_label in &metadata_labels {
+            for target_label in controlled_labels.iter().chain(informational_labels.iter()) {
                 let rust_seg = rust_sec_segs.iter().find(|s| s.label == *target_label);
                 let cpp_seg = cpp_sec_segs.iter().find(|s| s.label == *target_label);
+                let is_controlled = controlled_labels.contains(target_label);
 
                 match (rust_seg, cpp_seg) {
                     (Some(rs), Some(cs)) => {
                         compare_segment_bytes("secondary", target_label, &rs.payload, &cs.payload);
-                        if rs.payload != cs.payload {
+                        if rs.payload != cs.payload && is_controlled {
                             any_secondary_diff = true;
                         }
                     }
                     (Some(rs), None) => {
                         println!(
-                            "  [secondary] {target_label}: ONLY IN RUST ({} bytes)",
-                            rs.payload.len()
+                            "  [secondary] {target_label}: ONLY IN RUST ({} bytes){}",
+                            rs.payload.len(),
+                            if !is_controlled {
+                                " (jpeg-encoder)"
+                            } else {
+                                ""
+                            }
                         );
-                        any_secondary_diff = true;
+                        if is_controlled {
+                            any_secondary_diff = true;
+                        }
                     }
                     (None, Some(cs)) => {
                         println!(
-                            "  [secondary] {target_label}: ONLY IN C++ ({} bytes)",
-                            cs.payload.len()
+                            "  [secondary] {target_label}: ONLY IN C++ ({} bytes){}",
+                            cs.payload.len(),
+                            if !is_controlled {
+                                " (jpeg-encoder)"
+                            } else {
+                                ""
+                            }
                         );
-                        any_secondary_diff = true;
+                        if is_controlled {
+                            any_secondary_diff = true;
+                        }
                     }
                     (None, None) => {}
                 }
