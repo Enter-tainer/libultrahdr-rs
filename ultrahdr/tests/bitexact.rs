@@ -750,6 +750,150 @@ fn compare_segment_bytes(label: &str, seg_name: &str, rust_payload: &[u8], cpp_p
     }
 }
 
+// ==================== Parameterized encoder helpers ====================
+
+#[allow(clippy::too_many_arguments)]
+fn rust_encode_params(
+    sdr: &[u8],
+    hdr: &[u8],
+    w: u32,
+    h: u32,
+    multichannel: bool,
+    scale: u32,
+    nits: f32,
+) -> Vec<u8> {
+    Encoder::new()
+        .hdr_raw(
+            hdr,
+            w,
+            h,
+            PixelFormat::Rgba1010102,
+            ColorGamut::Bt2100,
+            ColorTransfer::Hlg,
+        )
+        .sdr_raw(sdr, w, h, ColorGamut::Bt709)
+        .quality(95)
+        .gainmap_quality(85)
+        .gainmap_scale(scale)
+        .multichannel_gainmap(multichannel)
+        .target_display_peak_nits(nits)
+        .encode()
+        .expect("Rust encode failed")
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn cpp_encode_params(
+    sdr: &[u8],
+    hdr: &[u8],
+    w: u32,
+    h: u32,
+    multichannel: bool,
+    scale: u32,
+    nits: f32,
+) -> Vec<u8> {
+    unsafe {
+        let enc = uhdr_create_encoder();
+        assert!(!enc.is_null(), "uhdr_create_encoder returned null");
+
+        let mut hdr_img = uhdr_raw_image {
+            fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
+            cg: uhdr_color_gamut::UHDR_CG_BT_2100,
+            ct: uhdr_color_transfer::UHDR_CT_HLG,
+            range: uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w,
+            h,
+            planes: [
+                hdr.as_ptr() as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
+            stride: [w, 0, 0],
+        };
+        let err = uhdr_enc_set_raw_image(enc, &mut hdr_img, uhdr_img_label::UHDR_HDR_IMG);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "set HDR failed"
+        );
+
+        let mut sdr_img = uhdr_raw_image {
+            fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
+            cg: uhdr_color_gamut::UHDR_CG_BT_709,
+            ct: uhdr_color_transfer::UHDR_CT_SRGB,
+            range: uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w,
+            h,
+            planes: [
+                sdr.as_ptr() as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
+            stride: [w, 0, 0],
+        };
+        let err = uhdr_enc_set_raw_image(enc, &mut sdr_img, uhdr_img_label::UHDR_SDR_IMG);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "set SDR failed"
+        );
+
+        let err = uhdr_enc_set_quality(enc, 95, uhdr_img_label::UHDR_BASE_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_quality(enc, 85, uhdr_img_label::UHDR_GAIN_MAP_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        let err = uhdr_enc_set_using_multi_channel_gainmap(enc, if multichannel { 1 } else { 0 });
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_gainmap_scale_factor(enc, scale as i32);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_target_display_peak_brightness(enc, nits);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        let err = uhdr_encode(enc);
+        if err.error_code != uhdr_codec_err::UHDR_CODEC_OK {
+            let detail = if err.has_detail != 0 {
+                std::ffi::CStr::from_ptr(err.detail.as_ptr())
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                "no detail".to_string()
+            };
+            panic!("C++ encode failed: {:?} - {detail}", err.error_code);
+        }
+
+        let stream = uhdr_get_encoded_stream(enc);
+        assert!(!stream.is_null());
+        let data = std::slice::from_raw_parts((*stream).data as *const u8, (*stream).data_sz);
+        let result = data.to_vec();
+
+        uhdr_release_encoder(enc);
+        result
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_encoder_bitexact_params(
+    name: &str,
+    sdr: &[u8],
+    hdr: &[u8],
+    w: u32,
+    h: u32,
+    multichannel: bool,
+    scale: u32,
+    nits: f32,
+) {
+    println!("\n=== Encoder bit-exact: {name} (mc={multichannel}, scale={scale}, nits={nits}) ===");
+    let rust_jpeg = rust_encode_params(sdr, hdr, w, h, multichannel, scale, nits);
+    let cpp_jpeg = unsafe { cpp_encode_params(sdr, hdr, w, h, multichannel, scale, nits) };
+    println!(
+        "[{name}] Rust: {} bytes, C++: {} bytes",
+        rust_jpeg.len(),
+        cpp_jpeg.len()
+    );
+    compare_metadata(&rust_jpeg, &cpp_jpeg, name);
+    compare_gainmap_pixels(&rust_jpeg, &cpp_jpeg, name);
+}
+
 // ==================== Encoder bit-exact tests ====================
 
 fn run_encoder_bitexact(name: &str, sdr: &[u8], hdr: &[u8], uniform_rgb: bool) {
@@ -822,6 +966,38 @@ fn encoder_bitexact_color_ramp() {
 fn encoder_bitexact_mixed() {
     let (sdr, hdr) = gen_mixed_bright_dark(W, H);
     run_encoder_bitexact("mixed", &sdr, &hdr, true);
+}
+
+// ==================== Multi-channel encoder bit-exact tests ====================
+
+#[test]
+fn encoder_bitexact_mc_gradient() {
+    let (sdr, hdr) = gen_gradient(W, H);
+    run_encoder_bitexact_params("mc_gradient", &sdr, &hdr, W, H, true, 4, 1600.0);
+}
+
+#[test]
+fn encoder_bitexact_mc_white() {
+    let (sdr, hdr) = gen_white(W, H);
+    run_encoder_bitexact_params("mc_white", &sdr, &hdr, W, H, true, 4, 1600.0);
+}
+
+#[test]
+fn encoder_bitexact_mc_black() {
+    let (sdr, hdr) = gen_black(W, H);
+    run_encoder_bitexact_params("mc_black", &sdr, &hdr, W, H, true, 4, 1600.0);
+}
+
+#[test]
+fn encoder_bitexact_mc_color_ramp() {
+    let (sdr, hdr) = gen_color_ramp(W, H);
+    run_encoder_bitexact_params("mc_color_ramp", &sdr, &hdr, W, H, true, 4, 1600.0);
+}
+
+#[test]
+fn encoder_bitexact_mc_mixed() {
+    let (sdr, hdr) = gen_mixed_bright_dark(W, H);
+    run_encoder_bitexact_params("mc_mixed", &sdr, &hdr, W, H, true, 4, 1600.0);
 }
 
 // ==================== Decoder bit-exact tests ====================

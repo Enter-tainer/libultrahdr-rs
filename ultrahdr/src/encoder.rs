@@ -59,7 +59,9 @@ pub fn generate_gainmap(
 
     let headroom = target_peak_nits / SDR_WHITE_NITS;
 
-    // Whether we need gamut conversion for HDR pixels (C++ converts HDR to SDR gamut).
+    // Gamut conversion direction matching C++ (jpegr.cpp lines 607-631):
+    // When kWriteXmpMetadata=false and hdr_cg=BT2100, C++ converts SDR to HDR gamut
+    // (use_sdr_cg=false). This means the gain map is computed in HDR gamut space.
     let need_gamut_convert = sdr_gamut != hdr_gamut;
 
     // C++ uses hdr_white_nits for HDR nits scaling (1000 for HLG, 10000 for PQ).
@@ -70,8 +72,9 @@ pub fn generate_gainmap(
     };
 
     // First pass: find min/max gain across the image.
-    let mut min_gain_log2 = f32::MAX;
-    let mut max_gain_log2 = f32::MIN;
+    // For multichannel mode, track per-channel min/max (matching C++).
+    let mut min_gain_log2 = [f32::MAX; 3];
+    let mut max_gain_log2 = [f32::MIN; 3];
 
     // Temporary storage for per-pixel gain values.
     let channels = if multichannel { 3 } else { 1 };
@@ -138,13 +141,24 @@ pub fn generate_gainmap(
                 ),
             };
 
-            // Gamut conversion: convert HDR to SDR gamut (C++ does this).
+            // Gamut conversion: when use_base_cg=false (our case with BT2100 HDR),
+            // C++ converts SDR to HDR gamut (not HDR to SDR).
             if need_gamut_convert {
-                let hdr_color =
-                    gamut_convert(Color::new(hdr_r, hdr_g, hdr_b), hdr_gamut, sdr_gamut);
-                hdr_r = hdr_color.r;
-                hdr_g = hdr_color.g;
-                hdr_b = hdr_color.b;
+                if use_base_cg {
+                    // Convert HDR to SDR gamut
+                    let hdr_color =
+                        gamut_convert(Color::new(hdr_r, hdr_g, hdr_b), hdr_gamut, sdr_gamut);
+                    hdr_r = hdr_color.r;
+                    hdr_g = hdr_color.g;
+                    hdr_b = hdr_color.b;
+                } else {
+                    // Convert SDR to HDR gamut (matching C++ when use_sdr_cg=false)
+                    let sdr_color =
+                        gamut_convert(Color::new(sdr_r, sdr_g, sdr_b), sdr_gamut, hdr_gamut);
+                    sdr_r = sdr_color.r;
+                    sdr_g = sdr_color.g;
+                    sdr_b = sdr_color.b;
+                }
             }
 
             // clipNegatives: clip both SDR and HDR channels to max(0, val).
@@ -166,8 +180,8 @@ pub fn generate_gainmap(
                     let hdr_ch_nits = hdr_ch * hdr_nits_factor;
                     let gain = compute_gain(sdr_ch_nits, hdr_ch_nits);
                     gain_values[map_idx * 3 + ch] = gain;
-                    min_gain_log2 = min_gain_log2.min(gain);
-                    max_gain_log2 = max_gain_log2.max(gain);
+                    min_gain_log2[ch] = min_gain_log2[ch].min(gain);
+                    max_gain_log2[ch] = max_gain_log2[ch].max(gain);
                 }
             } else {
                 // C++ uses fmax(r,g,b) (use_luminance=false), not weighted luminance
@@ -177,51 +191,87 @@ pub fn generate_gainmap(
                 let hdr_y_nits = hdr_y * hdr_nits_factor;
                 let gain = compute_gain(sdr_y_nits, hdr_y_nits);
                 gain_values[map_idx] = gain;
-                min_gain_log2 = min_gain_log2.min(gain);
-                max_gain_log2 = max_gain_log2.max(gain);
+                min_gain_log2[0] = min_gain_log2[0].min(gain);
+                max_gain_log2[0] = max_gain_log2[0].max(gain);
             }
         }
     }
 
-    // Ensure valid range
-    if min_gain_log2 == f32::MAX {
-        min_gain_log2 = 0.0;
-    }
-    if max_gain_log2 == f32::MIN {
-        max_gain_log2 = 0.0;
-    }
-    // Clamp gain range to [-14.3, 15.6] matching C++ generateGainMapTwoPass.
-    min_gain_log2 = min_gain_log2.clamp(-14.3, 15.6);
-    max_gain_log2 = max_gain_log2.clamp(-14.3, 15.6);
-    // Ensure at least some range to avoid division by zero (C++ uses FLT_EPSILON + 0.1)
-    if (max_gain_log2 - min_gain_log2).abs() < f32::EPSILON {
-        max_gain_log2 += 0.1;
+    // Process per-channel min/max (C++ iterates over multichannel ? 3 : 1 channels).
+    let num_ch = if multichannel { 3 } else { 1 };
+    for ch in 0..num_ch {
+        // Ensure valid range
+        if min_gain_log2[ch] == f32::MAX {
+            min_gain_log2[ch] = 0.0;
+        }
+        if max_gain_log2[ch] == f32::MIN {
+            max_gain_log2[ch] = 0.0;
+        }
+        // Clamp gain range to [-14.3, 15.6] matching C++ generateGainMapTwoPass.
+        min_gain_log2[ch] = min_gain_log2[ch].clamp(-14.3, 15.6);
+        max_gain_log2[ch] = max_gain_log2[ch].clamp(-14.3, 15.6);
+        // Ensure at least some range to avoid division by zero (C++ uses FLT_EPSILON + 0.1)
+        if (max_gain_log2[ch] - min_gain_log2[ch]).abs() < f32::EPSILON {
+            max_gain_log2[ch] += 0.1;
+        }
     }
 
     // Second pass: quantize gain values to u8.
     let map_size = map_w * map_h * channels;
     let mut gainmap = vec![0u8; map_size];
 
-    for i in 0..map_size {
-        let gain_log2 = gain_values[i];
-        let normalized = (gain_log2 - min_gain_log2) / (max_gain_log2 - min_gain_log2);
-        let clamped = normalized.clamp(0.0, 1.0);
-        gainmap[i] = (clamped * 255.0 + 0.5) as u8;
+    if multichannel {
+        for i in 0..map_size {
+            let ch = i % 3;
+            let gain_log2 = gain_values[i];
+            let normalized =
+                (gain_log2 - min_gain_log2[ch]) / (max_gain_log2[ch] - min_gain_log2[ch]);
+            let clamped = normalized.clamp(0.0, 1.0);
+            gainmap[i] = (clamped * 255.0 + 0.5) as u8;
+        }
+    } else {
+        for i in 0..map_size {
+            let gain_log2 = gain_values[i];
+            let normalized = (gain_log2 - min_gain_log2[0]) / (max_gain_log2[0] - min_gain_log2[0]);
+            let clamped = normalized.clamp(0.0, 1.0);
+            gainmap[i] = (clamped * 255.0 + 0.5) as u8;
+        }
     }
 
-    let max_content_boost = (2.0f32).powf(max_gain_log2);
-    let min_content_boost = (2.0f32).powf(min_gain_log2);
     let offset = 1e-7;
 
-    let metadata = GainMapMetadata {
-        max_content_boost: [max_content_boost; 3],
-        min_content_boost: [min_content_boost; 3],
-        gamma: [1.0; 3],
-        offset_sdr: [offset; 3],
-        offset_hdr: [offset; 3],
-        hdr_capacity_min: 1.0,
-        hdr_capacity_max: headroom,
-        use_base_cg,
+    let metadata = if multichannel {
+        GainMapMetadata {
+            max_content_boost: [
+                (2.0f32).powf(max_gain_log2[0]),
+                (2.0f32).powf(max_gain_log2[1]),
+                (2.0f32).powf(max_gain_log2[2]),
+            ],
+            min_content_boost: [
+                (2.0f32).powf(min_gain_log2[0]),
+                (2.0f32).powf(min_gain_log2[1]),
+                (2.0f32).powf(min_gain_log2[2]),
+            ],
+            gamma: [1.0; 3],
+            offset_sdr: [offset; 3],
+            offset_hdr: [offset; 3],
+            hdr_capacity_min: 1.0,
+            hdr_capacity_max: headroom,
+            use_base_cg,
+        }
+    } else {
+        let max_content_boost = (2.0f32).powf(max_gain_log2[0]);
+        let min_content_boost = (2.0f32).powf(min_gain_log2[0]);
+        GainMapMetadata {
+            max_content_boost: [max_content_boost; 3],
+            min_content_boost: [min_content_boost; 3],
+            gamma: [1.0; 3],
+            offset_sdr: [offset; 3],
+            offset_hdr: [offset; 3],
+            hdr_capacity_min: 1.0,
+            hdr_capacity_max: headroom,
+            use_base_cg,
+        }
     };
 
     Ok((gainmap, metadata))

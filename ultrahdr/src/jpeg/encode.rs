@@ -1,4 +1,4 @@
-use jpeg_encoder::{ColorType, Encoder};
+use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 
 use crate::error::{Error, Result};
 
@@ -10,7 +10,8 @@ pub fn encode_rgb_to_jpeg(pixels: &[u8], width: u32, height: u32, quality: u8) -
         .try_into()
         .map_err(|_| Error::InvalidParam(format!("height {height} exceeds u16::MAX")))?;
     let mut buf = Vec::new();
-    let encoder = Encoder::new(&mut buf, quality);
+    let mut encoder = Encoder::new(&mut buf, quality);
+    encoder.set_sampling_factor(SamplingFactor::F_1_1);
     encoder
         .encode(pixels, w, h, ColorType::Rgb)
         .map_err(|e| Error::JpegError(e.to_string()))?;
