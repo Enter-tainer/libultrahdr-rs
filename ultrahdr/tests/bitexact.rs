@@ -1000,6 +1000,40 @@ fn encoder_bitexact_mc_mixed() {
     run_encoder_bitexact_params("mc_mixed", &sdr, &hdr, W, H, true, 4, 1600.0);
 }
 
+// ==================== Scale variant bit-exact tests ====================
+
+#[test]
+fn encoder_bitexact_scale1() {
+    let (sdr, hdr) = gen_gradient(W, H);
+    run_encoder_bitexact_params("scale1", &sdr, &hdr, W, H, false, 1, 1600.0);
+}
+
+#[test]
+fn encoder_bitexact_scale2() {
+    let (sdr, hdr) = gen_gradient(W, H);
+    run_encoder_bitexact_params("scale2", &sdr, &hdr, W, H, false, 2, 1600.0);
+}
+
+// ==================== Nits variant bit-exact tests ====================
+
+#[test]
+fn encoder_bitexact_nits1000() {
+    let (sdr, hdr) = gen_gradient(W, H);
+    run_encoder_bitexact_params("nits1000", &sdr, &hdr, W, H, false, 4, 1000.0);
+}
+
+#[test]
+fn encoder_bitexact_nits4000() {
+    let (sdr, hdr) = gen_gradient(W, H);
+    run_encoder_bitexact_params("nits4000", &sdr, &hdr, W, H, false, 4, 4000.0);
+}
+
+#[test]
+fn encoder_bitexact_nits10000() {
+    let (sdr, hdr) = gen_gradient(W, H);
+    run_encoder_bitexact_params("nits10000", &sdr, &hdr, W, H, false, 4, 10000.0);
+}
+
 // ==================== Decoder bit-exact tests ====================
 
 fn run_decoder_bitexact_f16(encoder_name: &str, jpeg: &[u8]) {
