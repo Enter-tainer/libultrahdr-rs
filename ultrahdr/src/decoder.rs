@@ -1,5 +1,6 @@
 //! UltraHDR JPEG decoder: extract gain map, apply it, and produce HDR output.
 
+#[cfg(not(feature = "simd"))]
 use crate::color::Color;
 use crate::color::transfer::{LUT_SIZE, TransferLuts, srgb_oetf};
 use crate::error::{Error, Result};
@@ -453,6 +454,229 @@ fn apply_gainmap_inner(
     }
 
     // Process a single row of pixels. All read-only data is shared by reference.
+    #[cfg(feature = "simd")]
+    let process_row = |y: usize, row_out: &mut [u8]| {
+        let row_start = y * sdr_width * sdr_bpp;
+        let sdr_row = &sdr_pixels[row_start..row_start + sdr_width * sdr_bpp];
+
+        // Per-row SIMD buffers (small enough to stay in L1 cache).
+        let mut r_lin_buf = vec![0.0f32; sdr_width];
+        let mut g_lin_buf = vec![0.0f32; sdr_width];
+        let mut b_lin_buf = vec![0.0f32; sdr_width];
+        let mut factor_r_buf = vec![0.0f32; sdr_width];
+        let mut factor_g_buf = vec![0.0f32; sdr_width];
+        let mut factor_b_buf = vec![0.0f32; sdr_width];
+        let mut hdr_r_buf = vec![0.0f32; sdr_width];
+        let mut hdr_g_buf = vec![0.0f32; sdr_width];
+        let mut hdr_b_buf = vec![0.0f32; sdr_width];
+        let mut a_buf = vec![255u8; sdr_width];
+
+        // Pass 1 (scalar): linearize SDR + sample gain map + compute gain factors
+        for x in 0..sdr_width {
+            let px_idx = x * sdr_bpp;
+            let r_u8 = sdr_row[px_idx];
+            let g_u8 = sdr_row[px_idx + 1];
+            let b_u8 = sdr_row[px_idx + 2];
+            a_buf[x] = if sdr_bpp >= 4 {
+                sdr_row[px_idx + 3]
+            } else {
+                255
+            };
+
+            r_lin_buf[x] = srgb_inv_u8[r_u8 as usize];
+            g_lin_buf[x] = srgb_inv_u8[g_u8 as usize];
+            b_lin_buf[x] = srgb_inv_u8[b_u8 as usize];
+
+            // Sample gain map (identical logic to scalar path)
+            if gainmap_is_rgb && multi_channel {
+                let gains = if let Some(ref idw) = idw_table {
+                    idw.sample_rgb(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        x as u32,
+                        y as u32,
+                    )
+                } else {
+                    sample_map_bilinear_rgb(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        scale_factor,
+                        x as u32,
+                        y as u32,
+                    )
+                };
+                factor_r_buf[x] = gain_lut.gain_factor_pub(gains[0], 0);
+                factor_g_buf[x] = gain_lut.gain_factor_pub(gains[1], 1);
+                factor_b_buf[x] = gain_lut.gain_factor_pub(gains[2], 2);
+            } else {
+                let gain = if gainmap_is_rgb {
+                    let gains = if let Some(ref idw) = idw_table {
+                        idw.sample_rgb(
+                            gainmap,
+                            map_width as u32,
+                            map_height as u32,
+                            x as u32,
+                            y as u32,
+                        )
+                    } else {
+                        sample_map_bilinear_rgb(
+                            gainmap,
+                            map_width as u32,
+                            map_height as u32,
+                            scale_factor,
+                            x as u32,
+                            y as u32,
+                        )
+                    };
+                    gains[0] * 0.2126 + gains[1] * 0.7152 + gains[2] * 0.0722
+                } else if let Some(ref idw) = idw_table {
+                    idw.sample(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        x as u32,
+                        y as u32,
+                    )
+                } else {
+                    sample_map_bilinear(
+                        gainmap,
+                        map_width as u32,
+                        map_height as u32,
+                        scale_factor,
+                        x as u32,
+                        y as u32,
+                    )
+                };
+                if multi_channel {
+                    factor_r_buf[x] = gain_lut.gain_factor_pub(gain, 0);
+                    factor_g_buf[x] = gain_lut.gain_factor_pub(gain, 1);
+                    factor_b_buf[x] = gain_lut.gain_factor_pub(gain, 2);
+                } else {
+                    let f = gain_lut.gain_factor_pub(gain, 0);
+                    factor_r_buf[x] = f;
+                    factor_g_buf[x] = f;
+                    factor_b_buf[x] = f;
+                }
+            }
+        }
+
+        // Pass 2 (SIMD): apply gain = (lin + offset_sdr) * factor - offset_hdr
+        let off_sdr = gain_lut.offset_sdr();
+        let off_hdr = gain_lut.offset_hdr();
+        crate::simd::apply_gain_simd(
+            &r_lin_buf,
+            &g_lin_buf,
+            &b_lin_buf,
+            &factor_r_buf,
+            &factor_g_buf,
+            &factor_b_buf,
+            &off_sdr,
+            &off_hdr,
+            &mut hdr_r_buf,
+            &mut hdr_g_buf,
+            &mut hdr_b_buf,
+        );
+
+        // Pass 3: transfer function
+        match output_transfer {
+            ColorTransfer::Linear => {
+                crate::simd::clamp_simd(&mut hdr_r_buf, 0.0, MAX_LINEAR);
+                crate::simd::clamp_simd(&mut hdr_g_buf, 0.0, MAX_LINEAR);
+                crate::simd::clamp_simd(&mut hdr_b_buf, 0.0, MAX_LINEAR);
+            }
+            ColorTransfer::Srgb => {
+                for x in 0..sdr_width {
+                    hdr_r_buf[x] = srgb_oetf(hdr_r_buf[x].max(0.0));
+                    hdr_g_buf[x] = srgb_oetf(hdr_g_buf[x].max(0.0));
+                    hdr_b_buf[x] = srgb_oetf(hdr_b_buf[x].max(0.0));
+                }
+            }
+            ColorTransfer::Pq => {
+                for x in 0..sdr_width {
+                    hdr_r_buf[x] = lut_lookup(
+                        pq_lut,
+                        (hdr_r_buf[x] * PQ_SCALE).clamp(0.0, 1.0),
+                        lut_scale,
+                        lut_max_idx,
+                    );
+                    hdr_g_buf[x] = lut_lookup(
+                        pq_lut,
+                        (hdr_g_buf[x] * PQ_SCALE).clamp(0.0, 1.0),
+                        lut_scale,
+                        lut_max_idx,
+                    );
+                    hdr_b_buf[x] = lut_lookup(
+                        pq_lut,
+                        (hdr_b_buf[x] * PQ_SCALE).clamp(0.0, 1.0),
+                        lut_scale,
+                        lut_max_idx,
+                    );
+                }
+            }
+            ColorTransfer::Hlg => {
+                for x in 0..sdr_width {
+                    hdr_r_buf[x] = lut_lookup(
+                        hlg_lut,
+                        (hdr_r_buf[x] * HLG_SCALE).clamp(0.0, 1.0),
+                        lut_scale,
+                        lut_max_idx,
+                    );
+                    hdr_g_buf[x] = lut_lookup(
+                        hlg_lut,
+                        (hdr_g_buf[x] * HLG_SCALE).clamp(0.0, 1.0),
+                        lut_scale,
+                        lut_max_idx,
+                    );
+                    hdr_b_buf[x] = lut_lookup(
+                        hlg_lut,
+                        (hdr_b_buf[x] * HLG_SCALE).clamp(0.0, 1.0),
+                        lut_scale,
+                        lut_max_idx,
+                    );
+                }
+            }
+        }
+
+        // Pass 4: output format conversion
+        for x in 0..sdr_width {
+            let r_out = hdr_r_buf[x];
+            let g_out = hdr_g_buf[x];
+            let b_out = hdr_b_buf[x];
+            let a_u8 = a_buf[x];
+            let out_idx = x * out_bpp;
+            match output_format {
+                PixelFormat::Rgba8888 => {
+                    row_out[out_idx] = (r_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    row_out[out_idx + 1] = (g_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    row_out[out_idx + 2] = (b_out.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    row_out[out_idx + 3] = a_u8;
+                }
+                PixelFormat::Rgba1010102 => {
+                    let r10 = (r_out.clamp(0.0, 1.0) * 1023.0 + 0.5) as u32;
+                    let g10 = (g_out.clamp(0.0, 1.0) * 1023.0 + 0.5) as u32;
+                    let b10 = (b_out.clamp(0.0, 1.0) * 1023.0 + 0.5) as u32;
+                    let a2 = ((a_u8 as u32) >> 6) & 0x3;
+                    let packed = r10 | (g10 << 10) | (b10 << 20) | (a2 << 30);
+                    row_out[out_idx..out_idx + 4].copy_from_slice(&packed.to_le_bytes());
+                }
+                PixelFormat::RgbaF16 => {
+                    let r_h = f32_to_f16(r_out);
+                    let g_h = f32_to_f16(g_out);
+                    let b_h = f32_to_f16(b_out);
+                    let a_h = f32_to_f16(a_u8 as f32 / 255.0);
+                    row_out[out_idx..out_idx + 2].copy_from_slice(&r_h.to_le_bytes());
+                    row_out[out_idx + 2..out_idx + 4].copy_from_slice(&g_h.to_le_bytes());
+                    row_out[out_idx + 4..out_idx + 6].copy_from_slice(&b_h.to_le_bytes());
+                    row_out[out_idx + 6..out_idx + 8].copy_from_slice(&a_h.to_le_bytes());
+                }
+            }
+        }
+    };
+
+    // Scalar path (used when simd feature is not enabled).
+    #[cfg(not(feature = "simd"))]
     let process_row = |y: usize, row_out: &mut [u8]| {
         let row_start = y * sdr_width * sdr_bpp;
         let sdr_row = &sdr_pixels[row_start..row_start + sdr_width * sdr_bpp];

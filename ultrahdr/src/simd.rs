@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use pulp::{Arch, Simd, WithSimd};
 
 struct ApplyGainChannel<'a> {
@@ -27,7 +25,7 @@ impl WithSimd for ApplyGainChannel<'_> {
         debug_assert_eq!(n, out.len());
 
         let v_offset_sdr = simd.splat_f32s(offset_sdr);
-        let v_neg_offset_hdr = simd.splat_f32s(-offset_hdr);
+        let v_offset_hdr = simd.splat_f32s(offset_hdr);
 
         let (lin_head, lin_tail) = S::as_simd_f32s(lin);
         let (fac_head, fac_tail) = S::as_simd_f32s(factor);
@@ -35,8 +33,8 @@ impl WithSimd for ApplyGainChannel<'_> {
 
         for ((o, &l), &f) in out_head.iter_mut().zip(lin_head).zip(fac_head) {
             let shifted = simd.add_f32s(l, v_offset_sdr);
-            // fma: factor * shifted + (-offset_hdr)
-            *o = simd.mul_add_f32s(f, shifted, v_neg_offset_hdr);
+            let product = simd.mul_f32s(f, shifted);
+            *o = simd.sub_f32s(product, v_offset_hdr);
         }
 
         for ((o, &l), &f) in out_tail.iter_mut().zip(lin_tail).zip(fac_tail) {

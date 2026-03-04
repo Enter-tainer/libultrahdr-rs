@@ -66,6 +66,22 @@ impl GainLut {
         self.tables[channel][idx.min(GAIN_LUT_SIZE - 1)]
     }
 
+    /// Public accessor for gain_factor (used by SIMD path).
+    #[inline(always)]
+    pub fn gain_factor_pub(&self, gain: f32, ch: usize) -> f32 {
+        self.gain_factor(gain, ch)
+    }
+
+    /// Get per-channel SDR offsets.
+    pub fn offset_sdr(&self) -> [f32; 3] {
+        self.offset_sdr
+    }
+
+    /// Get per-channel HDR offsets.
+    pub fn offset_hdr(&self) -> [f32; 3] {
+        self.offset_hdr
+    }
+
     /// Apply a single-channel gain via LUT lookup.
     #[inline(always)]
     pub fn apply_single(&self, color: Color, gain: f32) -> Color {
