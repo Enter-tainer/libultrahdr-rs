@@ -1,62 +1,66 @@
-# GOAL: Bit-Exact Tests + Decode Performance Optimization
+# GOAL: pulp SIMD Optimization for apply_gainmap
 
 ## Background
 
-The Rust UltraHDR encoder is now metadata-aligned with C++ libultrahdr (LUT-based inverse
-OETF, correct offsets, gain clamping, etc.). Current status:
-- Encoder metadata: bit-exact match with C++ on gradient/white scenarios
-- Cross-decode: works (Rust→C++ and C++→Rust)
-- Encode performance: on par with C++ (0.98x at 512x512)
-- Decode performance: 2.4x slower than C++ (24.3ms vs 10.0ms at 512x512)
+libultrahdr-rs decode performance has been optimized from 24.3ms to 4.3ms (with rayon)
+at 512x512. Current breakdown (Intel Xeon 8375C, AVX-512):
 
-Existing tests use PSNR thresholds (20-55 dB) against golden data files, but do NOT
-verify strict bit-exact match by calling both Rust and C++ at runtime.
+| Step | Single-threaded | With rayon |
+|------|----------------|------------|
+| JPEG decode (primary) | 1.3ms | 1.7ms |
+| JPEG decode (gainmap) | 0.0ms | 0.1ms |
+| apply_gainmap (HLG/PQ) | 13.1ms | 3.2ms |
+| apply_gainmap (Linear) | 8.3ms | 2.3ms |
+| **Total** | **14.5ms** | **5.0ms** |
+
+apply_gainmap remains the bottleneck (64% of total). The inner loop processes each
+pixel through: sRGB inverse LUT (256 entries) -> gain map sampling (bilinear/IDW) ->
+gain factor LUT (1024 entries) -> arithmetic (add/mul/sub) -> transfer function LUT
+(65536 entries, PQ/HLG only) -> output format conversion (clamp/scale/cast).
 
 ## Objective
 
-### Part 1: Strict Bit-Exact Test Suite
+Use the `pulp` crate to add SIMD vectorization to `apply_gainmap_inner`, processing
+multiple pixels in parallel within each row. This complements rayon's row-level
+parallelism with pixel-level SIMD.
 
-Add integration tests that call both Rust and C++ (via ultrahdr-sys FFI) at runtime
-and compare output pixel-by-pixel:
+### Vectorization Strategy
 
-**Encoder bit-exact tests:**
-- Same synthetic input → encode with Rust and C++ → compare:
-  - Gain map metadata values (exact float match)
-  - Gain map pixel bytes (extract + decompress, byte-by-byte)
-- Scenarios: gradient, solid white, solid black, color ramps, mixed bright/dark
+**Batch N pixels per iteration** (N = SIMD width: 8 for AVX2, 16 for AVX-512):
 
-**Decoder bit-exact tests:**
-- Same UltraHDR JPEG → decode with Rust and C++ → compare decoded pixels byte-by-byte
-- Test with both Rust-encoded and C++-encoded JPEGs
-- Output formats: RGBA1010102 (HLG), RGBA1010102 (PQ), RgbaF16 (Linear)
-- Report max pixel diff and count of differing pixels
+1. **Scalar**: Read N pixels' u8 RGB values, do N*3 sRGB inverse LUT lookups
+2. **Scalar**: Do N gain map samples (bilinear/IDW - data-dependent access)
+3. **Scalar**: Do N*3 gain factor LUT lookups (1024-entry)
+4. **SIMD**: N parallel gain applications: `(color + offset_sdr) * factor - offset_hdr`
+5. **Scalar/SIMD**: N*3 transfer function (scalar LUT for PQ/HLG, SIMD clamp for Linear)
+6. **SIMD**: N parallel output format conversions (clamp + scale + cast)
 
-### Part 2: Decode Performance Optimization
+LUT lookups remain scalar because pulp does not expose gather instructions.
+Arithmetic and format conversion are fully vectorizable.
 
-Optimize Rust decode to match C++ speed (~10ms at 512x512) while maintaining bit-exact
-output. Primary bottleneck is likely JPEG decode (`jpeg-decoder` vs `libjpeg-turbo`).
+### Expected Performance
 
-Candidate optimizations (in priority order):
-1. Replace `jpeg-decoder` with faster alternative (e.g. `zune-jpeg` feature flag)
-2. Eliminate `rgb_to_rgba` allocation (decode directly to RGBA or use in-place)
-3. Optimize `apply_gainmap_to_sdr` hot loops (SIMD-friendly patterns, reduce branching)
-4. Enable `rayon` parallelism for gain map application
+- SIMD-able operations (arithmetic + conversion) are ~30% of per-pixel work
+- With 8-16x SIMD speedup on those portions: ~1.3-1.5x overall per-pixel speedup
+- Single-threaded: 13.1ms -> ~9-10ms
+- With rayon: 3.2ms -> ~2.2-2.5ms
+- Conservative estimate; actual gain depends on memory bandwidth saturation
 
 ## Constraints
 
-- All existing 78+ tests must continue to pass
-- No new unsafe code in the main library
-- Performance optimizations must not change output (bit-exact preservation)
-- New faster JPEG decoder should be behind an optional feature flag
+- **Bit-exact output**: SIMD must produce identical results to scalar path
+- **Optional feature flag**: `simd` feature in Cargo.toml, pulp as optional dependency
+- **No unsafe code**: pulp provides safe SIMD abstractions
+- **Scalar fallback**: Non-SIMD path unchanged, guarded by `#[cfg(feature = "simd")]`
+- All 101 existing tests must continue to pass
 - `cargo clippy --all-targets -- -D warnings` clean
 - `cargo fmt --check` clean
 
 ## Success Criteria
 
-1. **Encoder bit-exact**: At least 5 scenarios where Rust and C++ gain map metadata
-   match exactly (float equality) and gain map pixels match byte-for-byte
-2. **Decoder bit-exact**: For each tested JPEG, Rust and C++ decoded pixels are
-   identical (0 differing pixels) across HLG, PQ, and Linear output modes
-3. **Decode performance**: Rust decode within 1.5x of C++ speed (target: <15ms at 512x512)
-4. **All tests pass**: `cargo test` green (including new bit-exact tests)
-5. **CI clean**: clippy + fmt pass
+1. **Feature flag**: `cargo test -p ultrahdr --features simd` compiles and passes all tests
+2. **Bit-exact**: SIMD path produces byte-identical output to scalar path for all
+   transfer functions (Linear/Srgb/PQ/HLG) and formats (Rgba8888/Rgba1010102/RgbaF16)
+3. **Performance**: apply_gainmap at least 1.2x faster single-threaded (measurable via
+   decode_profile test), no regression with rayon
+4. **CI clean**: clippy + fmt pass with and without `simd` feature
