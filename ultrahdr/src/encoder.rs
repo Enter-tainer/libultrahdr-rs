@@ -9,7 +9,8 @@ use crate::color::transfer::{
 use crate::error::{Error, Result};
 use crate::gainmap::math::{compute_gain, global_tonemap};
 use crate::gainmap::metadata::{
-    GainMapMetadataFrac, encode_gainmap_metadata, write_xmp_gainmap_metadata,
+    GainMapMetadataFrac, encode_gainmap_metadata, float_to_signed_fraction,
+    float_to_unsigned_fraction, write_xmp_gainmap_metadata, write_xmp_primary_container,
 };
 use crate::jpeg::parse_jpeg_segments;
 use crate::mpf::{calculate_mpf_size, generate_mpf};
@@ -228,50 +229,78 @@ pub fn generate_gainmap(
 }
 
 /// Convert float metadata to rational fraction representation for ISO encoding.
+///
+/// Uses continued fractions algorithm (matching C++ `floatToSignedFraction`/
+/// `floatToUnsignedFraction`) for each field independently, producing compact
+/// and accurate rational approximations.
 fn metadata_to_frac(meta: &GainMapMetadata) -> GainMapMetadataFrac {
-    let denom = 10000u32;
-
-    let to_n = |val: f32| -> i32 { (val * denom as f32) as i32 };
-    let to_n_u = |val: f32| -> u32 { (val.max(0.0) * denom as f32) as u32 };
-
     let all_identical = meta.are_all_channels_identical();
     let ch = if all_identical { 1 } else { 3 };
 
     let mut frac = GainMapMetadataFrac {
         gain_map_min_n: [0; 3],
-        gain_map_min_d: [denom; 3],
+        gain_map_min_d: [1; 3],
         gain_map_max_n: [0; 3],
-        gain_map_max_d: [denom; 3],
-        gain_map_gamma_n: [denom; 3],
-        gain_map_gamma_d: [denom; 3],
+        gain_map_max_d: [1; 3],
+        gain_map_gamma_n: [1; 3],
+        gain_map_gamma_d: [1; 3],
         base_offset_n: [0; 3],
-        base_offset_d: [denom; 3],
+        base_offset_d: [1; 3],
         alternate_offset_n: [0; 3],
-        alternate_offset_d: [denom; 3],
-        base_hdr_headroom_n: to_n_u(meta.hdr_capacity_min.log2()),
-        base_hdr_headroom_d: denom,
-        alternate_hdr_headroom_n: to_n_u(meta.hdr_capacity_max.log2()),
-        alternate_hdr_headroom_d: denom,
+        alternate_offset_d: [1; 3],
+        base_hdr_headroom_n: 0,
+        base_hdr_headroom_d: 1,
+        alternate_hdr_headroom_n: 0,
+        alternate_hdr_headroom_d: 1,
         backward_direction: false,
         use_base_color_space: meta.use_base_cg,
     };
 
     for i in 0..ch {
-        frac.gain_map_min_n[i] = to_n(meta.min_content_boost[i].log2());
-        frac.gain_map_max_n[i] = to_n(meta.max_content_boost[i].log2());
-        frac.gain_map_gamma_n[i] = to_n_u(meta.gamma[i]);
-        frac.base_offset_n[i] = to_n(meta.offset_sdr[i]);
-        frac.alternate_offset_n[i] = to_n(meta.offset_hdr[i]);
+        let (n, d) = float_to_signed_fraction(meta.min_content_boost[i].log2()).unwrap_or((0, 1));
+        frac.gain_map_min_n[i] = n;
+        frac.gain_map_min_d[i] = d;
+
+        let (n, d) = float_to_signed_fraction(meta.max_content_boost[i].log2()).unwrap_or((0, 1));
+        frac.gain_map_max_n[i] = n;
+        frac.gain_map_max_d[i] = d;
+
+        let (n, d) = float_to_unsigned_fraction(meta.gamma[i]).unwrap_or((1, 1));
+        frac.gain_map_gamma_n[i] = n;
+        frac.gain_map_gamma_d[i] = d;
+
+        let (n, d) = float_to_signed_fraction(meta.offset_sdr[i]).unwrap_or((0, 1));
+        frac.base_offset_n[i] = n;
+        frac.base_offset_d[i] = d;
+
+        let (n, d) = float_to_signed_fraction(meta.offset_hdr[i]).unwrap_or((0, 1));
+        frac.alternate_offset_n[i] = n;
+        frac.alternate_offset_d[i] = d;
     }
 
     // Copy ch0 to remaining channels if single-channel
     for i in ch..3 {
         frac.gain_map_min_n[i] = frac.gain_map_min_n[0];
+        frac.gain_map_min_d[i] = frac.gain_map_min_d[0];
         frac.gain_map_max_n[i] = frac.gain_map_max_n[0];
+        frac.gain_map_max_d[i] = frac.gain_map_max_d[0];
         frac.gain_map_gamma_n[i] = frac.gain_map_gamma_n[0];
+        frac.gain_map_gamma_d[i] = frac.gain_map_gamma_d[0];
         frac.base_offset_n[i] = frac.base_offset_n[0];
+        frac.base_offset_d[i] = frac.base_offset_d[0];
         frac.alternate_offset_n[i] = frac.alternate_offset_n[0];
+        frac.alternate_offset_d[i] = frac.alternate_offset_d[0];
     }
+
+    let (n, d) =
+        float_to_unsigned_fraction(meta.hdr_capacity_min.log2().max(0.0)).unwrap_or((0, 1));
+    frac.base_hdr_headroom_n = n;
+    frac.base_hdr_headroom_d = d;
+
+    let (n, d) =
+        float_to_unsigned_fraction(meta.hdr_capacity_max.log2().max(0.0)).unwrap_or((0, 1));
+    frac.alternate_hdr_headroom_n = n;
+    frac.alternate_hdr_headroom_d = d;
 
     frac
 }
@@ -287,7 +316,9 @@ const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 /// Inserts XMP metadata, ISO 21496-1 binary metadata, and MPF markers into the
 /// primary JPEG, then appends the gain map JPEG as a secondary image.
 ///
-/// Port of `JpegR::appendGainMap()` from libultrahdr.
+/// Structure matching C++ `JpegR::appendGainMap()`:
+/// - Primary: SOI → APP0/EXIF → XMP APP1 (container directory) → ISO APP2 (stub) → ICC APP2 → MPF APP2 → rest
+/// - Secondary: SOI → XMP APP1 (gainmap metadata) → ISO APP2 (full) → rest of gain map JPEG
 pub fn assemble_ultrahdr(
     sdr_jpeg: &[u8],
     gainmap_jpeg: &[u8],
@@ -306,7 +337,7 @@ pub fn assemble_ultrahdr(
     }
 
     // Generate metadata payloads
-    let xmp_data = match xmp_override {
+    let secondary_xmp_data = match xmp_override {
         Some(d) => d.to_vec(),
         None => write_xmp_gainmap_metadata(metadata)?,
     };
@@ -314,11 +345,20 @@ pub fn assemble_ultrahdr(
     let frac = metadata_to_frac(metadata);
     let iso_data = encode_gainmap_metadata(&frac)?;
 
+    // Calculate secondary image total size (needed for primary container XMP).
+    // Secondary = SOI(2) + XMP APP1 segment + ISO APP2 segment + rest of gainmap JPEG
+    let xmp_secondary_seg_size = 2 + 2 + XMP_SIG.len() + secondary_xmp_data.len(); // FF E1 + length(2) + sig + data
+    let iso_secondary_seg_size = 2 + 2 + ISO_GAINMAP_TAG.len() + 1 + iso_data.len(); // FF E2 + length(2) + tag + null + data
+    let secondary_total_size = gainmap_jpeg.len() + xmp_secondary_seg_size + iso_secondary_seg_size;
+
+    // Generate primary XMP (container directory) with secondary image length
+    let primary_xmp_data = write_xmp_primary_container(secondary_total_size);
+
     // Parse the SDR JPEG to find segment positions
     let segments = parse_jpeg_segments(sdr_jpeg)?;
 
     // Build the output JPEG
-    let mut out = Vec::with_capacity(sdr_jpeg.len() + gainmap_jpeg.len() + 1024);
+    let mut out = Vec::with_capacity(sdr_jpeg.len() + gainmap_jpeg.len() + 2048);
 
     // SOI
     out.extend_from_slice(&[0xFF, 0xD8]);
@@ -341,15 +381,15 @@ pub fn assemble_ultrahdr(
         }
     }
 
-    // Insert XMP APP1 segment with gain map metadata
+    // Insert XMP APP1 segment with container directory (primary XMP)
     {
-        let xmp_payload_len = XMP_SIG.len() + xmp_data.len();
+        let xmp_payload_len = XMP_SIG.len() + primary_xmp_data.len();
         out.push(0xFF);
         out.push(0xE1); // APP1
         let seg_len = (xmp_payload_len + 2) as u16;
         out.extend_from_slice(&seg_len.to_be_bytes());
         out.extend_from_slice(XMP_SIG);
-        out.extend_from_slice(&xmp_data);
+        out.extend_from_slice(&primary_xmp_data);
     }
 
     // Insert ISO 21496-1 APP2 stub in primary image (version only, matching C++).
@@ -437,9 +477,6 @@ pub fn assemble_ultrahdr(
     let mpf_tiff_header_pos = (mpf_data_start + 4) as u32;
     let secondary_offset = primary_size - mpf_tiff_header_pos;
 
-    // Build the secondary image (gain map JPEG with ISO metadata inserted after SOI).
-    let iso_secondary_seg_len = 2 + ISO_GAINMAP_TAG.len() + 1 + iso_data.len(); // APP2 length field + namespace + null + payload
-    let secondary_total_size = gainmap_jpeg.len() + 2 + iso_secondary_seg_len; // +2 for FF E2 marker bytes
     let mpf = generate_mpf(
         primary_size,
         0,
@@ -448,8 +485,20 @@ pub fn assemble_ultrahdr(
     );
     out[mpf_data_start..mpf_data_start + mpf_data_size].copy_from_slice(&mpf);
 
-    // Append secondary image: SOI + ISO APP2 + rest of gain map JPEG
+    // Append secondary image: SOI + XMP APP1 (gainmap metadata) + ISO APP2 + rest
     out.extend_from_slice(&gainmap_jpeg[..2]); // SOI (FF D8)
+
+    // Insert XMP APP1 with gainmap metadata into secondary image
+    {
+        let xmp_payload_len = XMP_SIG.len() + secondary_xmp_data.len();
+        out.push(0xFF);
+        out.push(0xE1); // APP1
+        let seg_len = (xmp_payload_len + 2) as u16;
+        out.extend_from_slice(&seg_len.to_be_bytes());
+        out.extend_from_slice(XMP_SIG);
+        out.extend_from_slice(&secondary_xmp_data);
+    }
+
     // Insert ISO 21496-1 APP2 with full metadata into secondary image
     {
         let iso_payload_len = ISO_GAINMAP_TAG.len() + 1 + iso_data.len();

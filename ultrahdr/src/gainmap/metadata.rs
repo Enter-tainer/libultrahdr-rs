@@ -358,56 +358,297 @@ pub fn fraction_to_float(frac: &GainMapMetadataFrac) -> Result<GainMapMetadata> 
     })
 }
 
+// -- Float to fraction (continued fractions algorithm) --
+
+/// Convert a float to an unsigned fraction using continued fractions algorithm.
+/// Port of C++ `floatToUnsignedFractionImpl()` (gainmapmath.cpp:1626-1674).
+fn float_to_unsigned_fraction_impl(v: f32, max_numerator: u32) -> Option<(u32, u32)> {
+    if v.is_nan() || v < 0.0 || v > max_numerator as f32 {
+        return None;
+    }
+    let max_d: u64 = if v <= 1.0 {
+        u32::MAX as u64
+    } else {
+        (max_numerator as f64 / v as f64).floor() as u64
+    };
+
+    let mut denominator: u32 = 1;
+    let mut previous_d: u32 = 0;
+    let mut current_v: f64 = (v as f64) - (v as f64).floor();
+    let max_iter = 39;
+
+    for _ in 0..max_iter {
+        let numerator_double: f64 = (denominator as f64) * (v as f64);
+        if numerator_double > max_numerator as f64 {
+            return None;
+        }
+        let numerator = numerator_double.round() as u32;
+        if (numerator_double - numerator as f64).abs() == 0.0 {
+            return Some((numerator, denominator));
+        }
+        current_v = 1.0 / current_v;
+        let new_d: f64 = previous_d as f64 + current_v.floor() * denominator as f64;
+        if new_d > max_d as f64 {
+            return Some((numerator, denominator));
+        }
+        previous_d = denominator;
+        if new_d > u32::MAX as f64 {
+            return None;
+        }
+        denominator = new_d as u32;
+        current_v -= current_v.floor();
+    }
+    let numerator = ((denominator as f64) * (v as f64)).round() as u32;
+    Some((numerator, denominator))
+}
+
+/// Convert a float to a signed fraction using continued fractions.
+/// Port of C++ `floatToSignedFraction()`.
+pub fn float_to_signed_fraction(v: f32) -> Option<(i32, u32)> {
+    let (num, den) = float_to_unsigned_fraction_impl(v.abs(), i32::MAX as u32)?;
+    let signed_num = if v < 0.0 { -(num as i32) } else { num as i32 };
+    Some((signed_num, den))
+}
+
+/// Convert a float to an unsigned fraction using continued fractions.
+/// Port of C++ `floatToUnsignedFraction()`.
+pub fn float_to_unsigned_fraction(v: f32) -> Option<(u32, u32)> {
+    float_to_unsigned_fraction_impl(v, u32::MAX)
+}
+
 // -- XMP metadata --
 
 const HDRGM_NS: &str = "http://ns.adobe.com/hdr-gain-map/1.0/";
 
-/// Write gain map metadata as XMP bytes (secondary image XMP).
-pub fn write_xmp_gainmap_metadata(meta: &GainMapMetadata) -> Result<Vec<u8>> {
-    use std::fmt::Write;
-    let mut s = String::new();
-    writeln!(s, "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">").unwrap();
-    writeln!(
-        s,
-        " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-    )
-    .unwrap();
-    writeln!(s, "  <rdf:Description xmlns:hdrgm=\"{HDRGM_NS}\"").unwrap();
-    writeln!(s, "   hdrgm:Version=\"1.0\"").unwrap();
-    writeln!(
-        s,
-        "   hdrgm:GainMapMin=\"{}\"",
-        meta.min_content_boost[0].log2()
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "   hdrgm:GainMapMax=\"{}\"",
-        meta.max_content_boost[0].log2()
-    )
-    .unwrap();
-    writeln!(s, "   hdrgm:Gamma=\"{}\"", meta.gamma[0]).unwrap();
-    writeln!(s, "   hdrgm:OffsetSDR=\"{}\"", meta.offset_sdr[0]).unwrap();
-    writeln!(s, "   hdrgm:OffsetHDR=\"{}\"", meta.offset_hdr[0]).unwrap();
-    writeln!(
-        s,
-        "   hdrgm:HDRCapacityMin=\"{}\"",
-        meta.hdr_capacity_min.log2()
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "   hdrgm:HDRCapacityMax=\"{}\"",
-        meta.hdr_capacity_max.log2()
-    )
-    .unwrap();
-    if !meta.use_base_cg {
-        writeln!(s, "   hdrgm:BaseColorSpace=\"0\"").unwrap();
+/// Format a float value matching C++ `std::stringstream << float_value`
+/// with default precision (6 significant digits, `defaultfloat` format).
+///
+/// C++ `defaultfloat` uses `%g`-style formatting:
+/// - Scientific notation when exponent < -4 or >= precision (6)
+/// - Fixed notation otherwise
+/// - Trailing zeros are removed
+fn cpp_float_to_string(v: f32) -> String {
+    if v == 0.0 {
+        return "0".to_string();
     }
-    writeln!(s, "   hdrgm:BaseRenditionIsHDR=\"False\"/>").unwrap();
-    writeln!(s, " </rdf:RDF>").unwrap();
-    write!(s, "</x:xmpmeta>").unwrap();
-    Ok(s.into_bytes())
+    // Use %g-style formatting with 6 significant digits
+    // This matches C++ defaultfloat precision(6)
+    let s = format!("{:.6e}", v);
+    // Parse out mantissa and exponent
+    let parts: Vec<&str> = s.split('e').collect();
+    if parts.len() != 2 {
+        return format!("{v}");
+    }
+    let exp: i32 = parts[1].parse().unwrap_or(0);
+
+    // C++ %g rules: use scientific if exp < -4 or exp >= 6
+    if !(-4..6).contains(&exp) {
+        // Scientific notation: format with 6 significant digits
+        let formatted = format!("{:.5e}", v); // 5 decimal places = 6 sig digits
+        // Parse to remove trailing zeros from mantissa
+        let parts: Vec<&str> = formatted.split('e').collect();
+        let mantissa = parts[0].trim_end_matches('0').trim_end_matches('.');
+        let exp_val: i32 = parts[1].parse().unwrap_or(0);
+        // C++ Linux format: e+06, e-07 (at least 2 digits, with sign)
+        if exp_val >= 0 {
+            format!("{mantissa}e+{:02}", exp_val)
+        } else {
+            format!("{mantissa}e-{:02}", -exp_val)
+        }
+    } else {
+        // Fixed notation with 6 significant digits total
+        // Number of decimal places = 6 - (exp + 1) = 5 - exp
+        let decimal_places = (5 - exp).max(0) as usize;
+        let formatted = format!("{:.prec$}", v, prec = decimal_places);
+        // Remove trailing zeros after decimal point
+        if formatted.contains('.') {
+            formatted
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
+        } else {
+            formatted
+        }
+    }
+}
+
+/// C++ XmlWriter-compatible XML builder.
+///
+/// Produces output matching the exact format of C++ libultrahdr's XmlWriter:
+/// - `StartWritingElement(name)`: outputs `indent<name`, increases indent by 2 spaces
+/// - `WriteXmlns(prefix, uri)`: outputs `\nindent xmlns:prefix="uri"`
+/// - `WriteAttributeNameAndValue(name, value)`: outputs `\nindent name="value"`
+/// - `FinishWriting()`: closes all open elements
+struct XmlWriter {
+    output: String,
+    indent: String,
+    /// Stack of element names (for closing tags).
+    elements: Vec<String>,
+    /// Whether the current element's opening `<` bracket has been closed with `>`.
+    bracket_closed: Vec<bool>,
+}
+
+impl XmlWriter {
+    fn new() -> Self {
+        Self {
+            output: String::new(),
+            indent: String::new(),
+            elements: Vec::new(),
+            bracket_closed: Vec::new(),
+        }
+    }
+
+    fn start_element(&mut self, name: &str) -> &mut Self {
+        // If parent element's bracket is still open, close it first
+        if let Some(last) = self.bracket_closed.last_mut()
+            && !*last
+        {
+            self.output.push_str(">\n");
+            *last = true;
+        }
+        self.output.push_str(&self.indent);
+        self.output.push('<');
+        self.output.push_str(name);
+        self.elements.push(name.to_string());
+        self.bracket_closed.push(false);
+        self.indent.push_str("  ");
+        self
+    }
+
+    fn write_xmlns(&mut self, prefix: &str, uri: &str) -> &mut Self {
+        self.output.push('\n');
+        self.output.push_str(&self.indent);
+        self.output.push_str("xmlns:");
+        self.output.push_str(prefix);
+        self.output.push_str("=\"");
+        self.output.push_str(uri);
+        self.output.push('"');
+        self
+    }
+
+    fn write_attr_str(&mut self, name: &str, value: &str) -> &mut Self {
+        self.output.push('\n');
+        self.output.push_str(&self.indent);
+        self.output.push_str(name);
+        self.output.push_str("=\"");
+        self.output.push_str(value);
+        self.output.push('"');
+        self
+    }
+
+    fn write_attr_float(&mut self, name: &str, value: f32) -> &mut Self {
+        self.write_attr_str(name, &cpp_float_to_string(value))
+    }
+
+    fn write_attr_usize(&mut self, name: &str, value: usize) -> &mut Self {
+        self.write_attr_str(name, &value.to_string())
+    }
+
+    /// Close elements until depth matches `target_depth`.
+    /// `target_depth` is the number of open elements to keep.
+    fn finish_to_depth(&mut self, target_depth: usize) -> &mut Self {
+        while self.elements.len() > target_depth {
+            self.finish_element();
+        }
+        self
+    }
+
+    fn finish_element(&mut self) -> &mut Self {
+        if self.elements.is_empty() {
+            return self;
+        }
+        self.indent.truncate(self.indent.len().saturating_sub(2));
+        let name = self.elements.pop().unwrap();
+        let bracket_was_closed = self.bracket_closed.pop().unwrap_or(false);
+        if bracket_was_closed {
+            // Has children/content, use closing tag
+            self.output.push_str(&self.indent);
+            self.output.push_str("</");
+            self.output.push_str(&name);
+            self.output.push_str(">\n");
+        } else {
+            // Self-closing (no children)
+            self.output.push_str("/>\n");
+        }
+        self
+    }
+
+    fn finish_all(&mut self) -> &mut Self {
+        while !self.elements.is_empty() {
+            self.finish_element();
+        }
+        self
+    }
+
+    fn into_string(self) -> String {
+        self.output
+    }
+}
+
+/// Write primary image XMP (container directory) matching C++ `generateXmpForPrimaryImage()`.
+///
+/// This XMP describes the container structure: primary JPEG + secondary gain map JPEG.
+pub fn write_xmp_primary_container(secondary_image_length: usize) -> Vec<u8> {
+    let mut w = XmlWriter::new();
+    w.start_element("x:xmpmeta")
+        .write_xmlns("x", "adobe:ns:meta/")
+        .write_attr_str("x:xmptk", "Adobe XMP Core 5.1.2");
+    w.start_element("rdf:RDF")
+        .write_xmlns("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#");
+    w.start_element("rdf:Description")
+        .write_xmlns("Container", "http://ns.google.com/photos/1.0/container/")
+        .write_xmlns("Item", "http://ns.google.com/photos/1.0/container/item/")
+        .write_xmlns("hdrgm", HDRGM_NS)
+        .write_attr_str("hdrgm:Version", "1.0");
+
+    // Container:Directory > rdf:Seq
+    w.start_element("Container:Directory");
+    w.start_element("rdf:Seq");
+
+    // First item: Primary
+    let item_depth = w.elements.len(); // depth to return to after each rdf:li
+    w.start_element("rdf:li")
+        .write_attr_str("rdf:parseType", "Resource");
+    w.start_element("Container:Item")
+        .write_attr_str("Item:Semantic", "Primary")
+        .write_attr_str("Item:Mime", "image/jpeg");
+    w.finish_to_depth(item_depth); // close Container:Item + rdf:li
+
+    // Second item: GainMap
+    w.start_element("rdf:li")
+        .write_attr_str("rdf:parseType", "Resource");
+    w.start_element("Container:Item")
+        .write_attr_str("Item:Semantic", "GainMap")
+        .write_attr_str("Item:Mime", "image/jpeg")
+        .write_attr_usize("Item:Length", secondary_image_length);
+
+    w.finish_all();
+    w.into_string().into_bytes()
+}
+
+/// Write gain map metadata as XMP bytes (secondary image XMP).
+///
+/// Matches C++ `generateXmpForSecondaryImage()` XmlWriter output format.
+pub fn write_xmp_gainmap_metadata(meta: &GainMapMetadata) -> Result<Vec<u8>> {
+    let mut w = XmlWriter::new();
+    w.start_element("x:xmpmeta")
+        .write_xmlns("x", "adobe:ns:meta/")
+        .write_attr_str("x:xmptk", "Adobe XMP Core 5.1.2");
+    w.start_element("rdf:RDF")
+        .write_xmlns("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#");
+    w.start_element("rdf:Description")
+        .write_xmlns("hdrgm", HDRGM_NS)
+        .write_attr_str("hdrgm:Version", "1.0")
+        .write_attr_float("hdrgm:GainMapMin", meta.min_content_boost[0].log2())
+        .write_attr_float("hdrgm:GainMapMax", meta.max_content_boost[0].log2())
+        .write_attr_float("hdrgm:Gamma", meta.gamma[0])
+        .write_attr_float("hdrgm:OffsetSDR", meta.offset_sdr[0])
+        .write_attr_float("hdrgm:OffsetHDR", meta.offset_hdr[0])
+        .write_attr_float("hdrgm:HDRCapacityMin", meta.hdr_capacity_min.log2())
+        .write_attr_float("hdrgm:HDRCapacityMax", meta.hdr_capacity_max.log2())
+        .write_attr_str("hdrgm:BaseRenditionIsHDR", "False");
+    w.finish_all();
+    Ok(w.into_string().into_bytes())
 }
 
 /// Parse gain map metadata from XMP bytes.
