@@ -35,3 +35,7 @@ ultrahdr-sys.workspace = true
 [[bench]]
 name = "transfer_bench"
 harness = false
+
+[[bench]]
+name = "codec_bench"
+harness = false
