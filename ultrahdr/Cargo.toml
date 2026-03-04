@@ -14,11 +14,13 @@ exclude = ["/target", "/artifacts"]
 [features]
 default = []
 rayon = ["dep:rayon"]
+simd = ["dep:pulp"]
 zune-jpeg = ["dep:zune-jpeg", "dep:zune-core"]
 
 [dependencies]
 jpeg-decoder = "0.3"
 jpeg-encoder = "0.6"
+pulp = { version = "0.22", optional = true }
 rayon = { version = "1", optional = true }
 roxmltree = "0.20"
 zune-jpeg = { version = "0.5", optional = true }
