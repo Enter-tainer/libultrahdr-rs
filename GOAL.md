@@ -1,66 +1,65 @@
-# GOAL: pulp SIMD Optimization for apply_gainmap
+# GOAL: Byte-Exact Metadata Between Rust and C++ Encoder
 
 ## Background
 
-libultrahdr-rs decode performance has been optimized from 24.3ms to 4.3ms (with rayon)
-at 512x512. Current breakdown (Intel Xeon 8375C, AVX-512):
+The Rust libultrahdr encoder produces UltraHDR JPEGs that are functionally correct
+(pixel PSNR > 30 dB vs C++, tests pass), but metadata segments are not byte-identical
+to C++ libultrahdr output. This causes some HDR viewers to fail to "light up" the image,
+as they may rely on exact metadata format/values.
 
-| Step | Single-threaded | With rayon |
-|------|----------------|------------|
-| JPEG decode (primary) | 1.3ms | 1.7ms |
-| JPEG decode (gainmap) | 0.0ms | 0.1ms |
-| apply_gainmap (HLG/PQ) | 13.1ms | 3.2ms |
-| apply_gainmap (Linear) | 8.3ms | 2.3ms |
-| **Total** | **14.5ms** | **5.0ms** |
-
-apply_gainmap remains the bottleneck (64% of total). The inner loop processes each
-pixel through: sRGB inverse LUT (256 entries) -> gain map sampling (bilinear/IDW) ->
-gain factor LUT (1024 entries) -> arithmetic (add/mul/sub) -> transfer function LUT
-(65536 entries, PQ/HLG only) -> output format conversion (clamp/scale/cast).
+Previous work (already completed):
+- offset_sdr/hdr: fixed from 1/64 to 1e-7 (matching C++ kSdrOffset/kHdrOffset)
+- use_base_cg: fixed from true to false (matching C++ API-0 raw input)
+- gain clamp: fixed from max(0).min(headroom) to clamp(-14.3, 15.6)
+- epsilon: fixed from 1e-6 to 0.1 (matching C++ FLT_EPSILON behavior)
+- pixel sampling: fixed to block-average in gamma space (matching C++ samplePixels)
 
 ## Objective
 
-Use the `pulp` crate to add SIMD vectorization to `apply_gainmap_inner`, processing
-multiple pixels in parallel within each row. This complements rayon's row-level
-parallelism with pixel-level SIMD.
+Make Rust encoder's metadata segments byte-identical to C++ libultrahdr for the same
+input. "Metadata segments" means:
 
-### Vectorization Strategy
+1. **XMP APP1**: The gain map XMP in the primary image
+2. **ISO APP2 (primary)**: Version stub in primary image
+3. **ISO APP2 (secondary)**: Full ISO 21496-1 binary metadata in gain map image
+4. **MPF APP2**: Multi-Picture Format linking primary and secondary images
 
-**Batch N pixels per iteration** (N = SIMD width: 8 for AVX2, 16 for AVX-512):
+## Known Remaining Differences
 
-1. **Scalar**: Read N pixels' u8 RGB values, do N*3 sRGB inverse LUT lookups
-2. **Scalar**: Do N gain map samples (bilinear/IDW - data-dependent access)
-3. **Scalar**: Do N*3 gain factor LUT lookups (1024-entry)
-4. **SIMD**: N parallel gain applications: `(color + offset_sdr) * factor - offset_hdr`
-5. **Scalar/SIMD**: N*3 transfer function (scalar LUT for PQ/HLG, SIMD clamp for Linear)
-6. **SIMD**: N parallel output format conversions (clamp + scale + cast)
+### 1. metadata_to_frac truncation vs rounding
+Rust uses `as i32`/`as u32` (truncation toward zero), C++ uses `roundf()`.
+Affects all fraction fields: gain_map_min/max_n, gamma_n, offset_n, headroom_n.
+```
+Example: log2(7.88) = 2.9779
+Rust: (2.9779 * 10000) as u32 = 29779  (truncation)
+C++:  roundf(2.9779 * 10000) = 29780   (rounding)
+```
 
-LUT lookups remain scalar because pulp does not expose gather instructions.
-Arithmetic and format conversion are fully vectorizable.
+### 2. XMP format
+Rust generates its own XMP XML format. C++ uses a specific template with potentially
+different attribute ordering, namespace declarations, precision, and whitespace.
 
-### Expected Performance
+### 3. JPEG segment ordering
+The order of APP0/APP1/APP2 segments in the assembled JPEG may differ from C++.
 
-- SIMD-able operations (arithmetic + conversion) are ~30% of per-pixel work
-- With 8-16x SIMD speedup on those portions: ~1.3-1.5x overall per-pixel speedup
-- Single-threaded: 13.1ms -> ~9-10ms
-- With rayon: 3.2ms -> ~2.2-2.5ms
-- Conservative estimate; actual gain depends on memory bandwidth saturation
+### 4. MPF byte layout
+MPF data structure should match but needs byte-level verification.
 
 ## Constraints
 
-- **Bit-exact output**: SIMD must produce identical results to scalar path
-- **Optional feature flag**: `simd` feature in Cargo.toml, pulp as optional dependency
-- **No unsafe code**: pulp provides safe SIMD abstractions
-- **Scalar fallback**: Non-SIMD path unchanged, guarded by `#[cfg(feature = "simd")]`
-- All 101 existing tests must continue to pass
+- All existing tests (105 with simd, 101 without) must continue to pass
+- Bitexact tests in `tests/bitexact.rs` must pass (encoder + decoder)
 - `cargo clippy --all-targets -- -D warnings` clean
 - `cargo fmt --check` clean
+- Changes limited to metadata encoding/assembly; no pixel processing changes
 
 ## Success Criteria
 
-1. **Feature flag**: `cargo test -p ultrahdr --features simd` compiles and passes all tests
-2. **Bit-exact**: SIMD path produces byte-identical output to scalar path for all
-   transfer functions (Linear/Srgb/PQ/HLG) and formats (Rgba8888/Rgba1010102/RgbaF16)
-3. **Performance**: apply_gainmap at least 1.2x faster single-threaded (measurable via
-   decode_profile test), no regression with rayon
-4. **CI clean**: clippy + fmt pass with and without `simd` feature
+1. **ISO binary metadata**: For uniform-RGB synthetic scenes (gradient, white, black,
+   mixed), `encode_gainmap_metadata()` output is byte-identical between Rust and C++
+2. **XMP metadata**: XMP bytes in primary image match C++ output byte-for-byte
+3. **MPF segment**: MPF APP2 data matches C++ output byte-for-byte
+4. **Bitexact test**: New test comparing full metadata segments (XMP + ISO + MPF)
+   between Rust and C++ encoder outputs, asserting zero diff
+5. **Cross-decode**: C++ decoder successfully decodes Rust-encoded UltraHDR JPEGs
+   with correct HDR rendering (existing bitexact decoder tests pass)
