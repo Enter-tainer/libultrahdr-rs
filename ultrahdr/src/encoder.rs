@@ -10,9 +10,8 @@ use crate::error::{Error, Result};
 use crate::gainmap::math::{compute_gain, global_tonemap};
 use crate::gainmap::metadata::{
     GainMapMetadataFrac, encode_gainmap_metadata, float_to_signed_fraction,
-    float_to_unsigned_fraction, write_xmp_gainmap_metadata, write_xmp_primary_container,
+    float_to_unsigned_fraction,
 };
-use crate::jpeg::parse_jpeg_segments;
 use crate::mpf::{calculate_mpf_size, generate_mpf};
 use crate::types::{ColorGamut, ColorTransfer, GainMapMetadata, PixelFormat, SDR_WHITE_NITS};
 
@@ -308,23 +307,20 @@ fn metadata_to_frac(meta: &GainMapMetadata) -> GainMapMetadataFrac {
 /// ISO 21496-1 gain map metadata namespace identifier.
 const ISO_GAINMAP_TAG: &[u8] = b"urn:iso:std:iso:ts:21496:-1";
 
-/// XMP APP1 namespace prefix.
-const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
-
 /// Assemble an UltraHDR JPEG from a primary SDR JPEG, gain map JPEG, and metadata.
 ///
-/// Inserts XMP metadata, ISO 21496-1 binary metadata, and MPF markers into the
-/// primary JPEG, then appends the gain map JPEG as a secondary image.
+/// Inserts ISO 21496-1 binary metadata and MPF markers into the primary JPEG,
+/// then appends the gain map JPEG as a secondary image.
 ///
-/// Structure matching C++ `JpegR::appendGainMap()`:
-/// - Primary: SOI → APP0/EXIF → XMP APP1 (container directory) → ISO APP2 (stub) → ICC APP2 → MPF APP2 → rest
-/// - Secondary: SOI → XMP APP1 (gainmap metadata) → ISO APP2 (full) → rest of gain map JPEG
+/// Structure matching C++ `JpegR::appendGainMap()` (UHDR_WRITE_ISO only, no XMP):
+/// - Primary: SOI → EXIF APP1 (if any) → ISO APP2 (stub) → MPF APP2 → rest of SDR JPEG (from after SOI)
+/// - Secondary: SOI → ISO APP2 (full metadata) → rest of gain map JPEG (from after SOI)
 pub fn assemble_ultrahdr(
     sdr_jpeg: &[u8],
     gainmap_jpeg: &[u8],
     metadata: &GainMapMetadata,
-    xmp_override: Option<&[u8]>,
-    icc_profile: Option<&[u8]>,
+    _xmp_override: Option<&[u8]>,
+    _icc_profile: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
     // Validate inputs
     if sdr_jpeg.len() < 2 || sdr_jpeg[0] != 0xFF || sdr_jpeg[1] != 0xD8 {
@@ -336,64 +332,28 @@ pub fn assemble_ultrahdr(
         ));
     }
 
-    // Generate metadata payloads
-    let secondary_xmp_data = match xmp_override {
-        Some(d) => d.to_vec(),
-        None => write_xmp_gainmap_metadata(metadata)?,
-    };
-
+    // Generate ISO metadata payload
     let frac = metadata_to_frac(metadata);
     let iso_data = encode_gainmap_metadata(&frac)?;
 
-    // Calculate secondary image total size (needed for primary container XMP).
-    // Secondary = SOI(2) + XMP APP1 segment + ISO APP2 segment + rest of gainmap JPEG
-    let xmp_secondary_seg_size = 2 + 2 + XMP_SIG.len() + secondary_xmp_data.len(); // FF E1 + length(2) + sig + data
+    // Calculate secondary image total size (no XMP — matching C++ UHDR_WRITE_ISO mode).
+    // Secondary = gainmap_jpeg + ISO APP2 segment inserted after SOI
     let iso_secondary_seg_size = 2 + 2 + ISO_GAINMAP_TAG.len() + 1 + iso_data.len(); // FF E2 + length(2) + tag + null + data
-    let secondary_total_size = gainmap_jpeg.len() + xmp_secondary_seg_size + iso_secondary_seg_size;
-
-    // Generate primary XMP (container directory) with secondary image length
-    let primary_xmp_data = write_xmp_primary_container(secondary_total_size);
-
-    // Parse the SDR JPEG to find segment positions
-    let segments = parse_jpeg_segments(sdr_jpeg)?;
+    let secondary_total_size = gainmap_jpeg.len() + iso_secondary_seg_size;
 
     // Build the output JPEG
-    let mut out = Vec::with_capacity(sdr_jpeg.len() + gainmap_jpeg.len() + 2048);
+    let mut out = Vec::with_capacity(sdr_jpeg.len() + secondary_total_size + 256);
+
+    // === PRIMARY IMAGE ===
+    // C++ writes: SOI → EXIF APP1 → ISO stub APP2 → MPF APP2 → rest of original JPEG (after SOI)
+    // Note: C++ does NOT selectively copy APP segments. It writes its own metadata first,
+    // then appends the entire original JPEG data after SOI. This means JFIF/APP0 etc.
+    // from the original appear after the inserted metadata segments.
 
     // SOI
     out.extend_from_slice(&[0xFF, 0xD8]);
 
-    // Copy existing APP0/APP1 (EXIF) segments first, inserting our metadata after them.
-    for seg in &segments.segments {
-        if seg.marker == 0xE0 || seg.marker == 0xE1 {
-            // Check if this is already an XMP or gain map segment; skip if so
-            if seg.data.starts_with(XMP_SIG) {
-                continue;
-            }
-            // Write this APP segment
-            out.push(0xFF);
-            out.push(seg.marker);
-            let len = (seg.data.len() + 2) as u16;
-            out.extend_from_slice(&len.to_be_bytes());
-            out.extend_from_slice(&seg.data);
-        } else {
-            break;
-        }
-    }
-
-    // Insert XMP APP1 segment with container directory (primary XMP)
-    {
-        let xmp_payload_len = XMP_SIG.len() + primary_xmp_data.len();
-        out.push(0xFF);
-        out.push(0xE1); // APP1
-        let seg_len = (xmp_payload_len + 2) as u16;
-        out.extend_from_slice(&seg_len.to_be_bytes());
-        out.extend_from_slice(XMP_SIG);
-        out.extend_from_slice(&primary_xmp_data);
-    }
-
-    // Insert ISO 21496-1 APP2 stub in primary image (version only, matching C++).
-    // The full metadata payload goes into the secondary (gain map) image.
+    // ISO 21496-1 APP2 stub in primary (version only, matching C++).
     {
         let iso_stub_payload_len = ISO_GAINMAP_TAG.len() + 1 + 4; // namespace + null + 4 version bytes
         out.push(0xFF);
@@ -405,76 +365,22 @@ pub fn assemble_ultrahdr(
         out.extend_from_slice(&[0u8; 4]); // min_version(0) + writer_version(0)
     }
 
-    // Insert ICC profile APP2 segment if provided
-    if let Some(icc) = icc_profile {
-        // ICC profile APP2: "ICC_PROFILE\0" + chunk_no(1) + num_chunks(1) + data
-        let icc_sig = b"ICC_PROFILE\0";
-        let payload_len = icc_sig.len() + 2 + icc.len();
-        out.push(0xFF);
-        out.push(0xE2); // APP2
-        let seg_len = (payload_len + 2) as u16;
-        out.extend_from_slice(&seg_len.to_be_bytes());
-        out.extend_from_slice(icc_sig);
-        out.push(1); // chunk number
-        out.push(1); // total chunks
-        out.extend_from_slice(icc);
-    }
-
-    // Calculate where the secondary image will be and insert MPF
-    // We need to know the total primary image size to set the offset correctly.
-    // Strategy: build the rest of the primary first, then fixup MPF offsets.
-
-    // Reserve space for MPF APP2 segment
+    // MPF APP2 (placeholder, will fixup after primary size is known)
     let mpf_data_size = calculate_mpf_size();
     out.push(0xFF);
     out.push(0xE2); // APP2
     let mpf_seg_len = (mpf_data_size + 2) as u16;
     out.extend_from_slice(&mpf_seg_len.to_be_bytes());
-    // Placeholder MPF data
     let mpf_data_start = out.len();
     out.extend_from_slice(&vec![0u8; mpf_data_size]);
 
-    // Copy remaining segments from the original JPEG (after the ones we already copied)
-    // Find the first segment that isn't APP0/APP1
-    let mut found_rest = false;
-    for seg in &segments.segments {
-        if seg.marker != 0xE0 && seg.marker != 0xE1 {
-            // Copy from this segment's offset in the source to the end
-            // But we need to handle the existing APP2 segments (skip any existing MPF)
-            if seg.data.starts_with(b"MPF\0") {
-                continue; // Skip existing MPF
-            }
-            if !found_rest {
-                found_rest = true;
-                // Copy everything from this segment to the end of the source JPEG
-                // (including SOS and entropy data)
-                let src_start = seg.offset;
-                out.extend_from_slice(&sdr_jpeg[src_start..]);
-                break;
-            }
-        }
-    }
+    // Rest of original SDR JPEG (skip SOI = first 2 bytes).
+    // This includes JFIF/APP0, DQT, SOF, DHT, SOS, and entropy data.
+    out.extend_from_slice(&sdr_jpeg[2..]);
 
-    // If we didn't find any non-APP0/APP1 segments, copy from after SOI + any APP segments
-    if !found_rest {
-        // Just copy everything after the segments we already processed
-        let last_seg_end = segments
-            .segments
-            .iter()
-            .rfind(|s| s.marker == 0xE0 || s.marker == 0xE1)
-            .map(|s| s.offset + 2 + 2 + s.data.len()) // marker(2) + length(2) + data
-            .unwrap_or(2); // after SOI
-        if last_seg_end < sdr_jpeg.len() {
-            out.extend_from_slice(&sdr_jpeg[last_seg_end..]);
-        }
-    }
-
-    // Now fix up the MPF data with correct offsets.
-    // Per MPF spec, secondary image offset is relative to the MPF TIFF header.
-    // mpf_data_start points to the start of MPF payload (including "MPF\0" sig).
-    // TIFF header starts 4 bytes into the MPF data (after "MPF\0").
+    // Fixup MPF with correct offsets
     let primary_size = out.len() as u32;
-    let mpf_tiff_header_pos = (mpf_data_start + 4) as u32;
+    let mpf_tiff_header_pos = (mpf_data_start + 4) as u32; // TIFF header after "MPF\0"
     let secondary_offset = primary_size - mpf_tiff_header_pos;
 
     let mpf = generate_mpf(
@@ -485,21 +391,13 @@ pub fn assemble_ultrahdr(
     );
     out[mpf_data_start..mpf_data_start + mpf_data_size].copy_from_slice(&mpf);
 
-    // Append secondary image: SOI + XMP APP1 (gainmap metadata) + ISO APP2 + rest
-    out.extend_from_slice(&gainmap_jpeg[..2]); // SOI (FF D8)
+    // === SECONDARY IMAGE (gain map) ===
+    // C++ writes: SOI → ISO APP2 (full metadata) → rest of gain map JPEG (after SOI)
 
-    // Insert XMP APP1 with gainmap metadata into secondary image
-    {
-        let xmp_payload_len = XMP_SIG.len() + secondary_xmp_data.len();
-        out.push(0xFF);
-        out.push(0xE1); // APP1
-        let seg_len = (xmp_payload_len + 2) as u16;
-        out.extend_from_slice(&seg_len.to_be_bytes());
-        out.extend_from_slice(XMP_SIG);
-        out.extend_from_slice(&secondary_xmp_data);
-    }
+    // SOI
+    out.extend_from_slice(&gainmap_jpeg[..2]);
 
-    // Insert ISO 21496-1 APP2 with full metadata into secondary image
+    // ISO 21496-1 APP2 with full metadata
     {
         let iso_payload_len = ISO_GAINMAP_TAG.len() + 1 + iso_data.len();
         out.push(0xFF);
@@ -510,7 +408,9 @@ pub fn assemble_ultrahdr(
         out.push(0x00); // null terminator
         out.extend_from_slice(&iso_data);
     }
-    out.extend_from_slice(&gainmap_jpeg[2..]); // rest of gain map after SOI
+
+    // Rest of gain map JPEG (skip SOI)
+    out.extend_from_slice(&gainmap_jpeg[2..]);
 
     Ok(out)
 }
@@ -1264,15 +1164,19 @@ mod tests {
     }
 
     #[test]
-    fn assemble_ultrahdr_contains_xmp() {
+    fn assemble_ultrahdr_no_xmp() {
+        // C++ encoder uses UHDR_WRITE_ISO mode (kWriteXmpMetadata=false),
+        // so output should NOT contain XMP metadata.
         let sdr_jpeg = create_minimal_jpeg();
         let gainmap_jpeg = create_minimal_jpeg();
         let meta = default_test_metadata();
         let out = assemble_ultrahdr(&sdr_jpeg, &gainmap_jpeg, &meta, None, None).unwrap();
-        // Check that XMP signature is present
         let xmp_sig = b"http://ns.adobe.com/xap/1.0/\0";
         let contains_xmp = out.windows(xmp_sig.len()).any(|w| w == xmp_sig);
-        assert!(contains_xmp, "output should contain XMP metadata");
+        assert!(
+            !contains_xmp,
+            "output should NOT contain XMP metadata (ISO-only mode)"
+        );
     }
 
     #[test]
