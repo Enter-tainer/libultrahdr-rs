@@ -511,6 +511,245 @@ fn f16_to_f32(bits: u16) -> f32 {
     f32::from_bits((sign << 31) | (new_exp << 23) | new_mant)
 }
 
+// ==================== JPEG segment parsing ====================
+
+/// A parsed JPEG APP marker segment.
+#[derive(Debug, Clone)]
+struct JpegSegment {
+    /// Marker byte (e.g. 0xE1 for APP1, 0xE2 for APP2).
+    marker: u8,
+    /// Human-readable label.
+    label: String,
+    /// Raw payload bytes (after the 2-byte length field).
+    payload: Vec<u8>,
+}
+
+/// Known APP marker signature prefixes.
+const XMP_SIGNATURE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+const ISO_SIGNATURE: &[u8] = b"urn:iso:std:iso:ts:21496:-1\0";
+const MPF_SIGNATURE: &[u8] = b"MPF\0";
+const ICC_SIGNATURE: &[u8] = b"ICC_PROFILE\0";
+const EXIF_SIGNATURE: &[u8] = b"Exif\0\0";
+
+/// Classify a segment by marker byte and payload prefix.
+fn classify_segment(marker: u8, payload: &[u8]) -> String {
+    match marker {
+        0xE0 => "JFIF/APP0".to_string(),
+        0xE1 => {
+            if payload.starts_with(XMP_SIGNATURE) {
+                "XMP".to_string()
+            } else if payload.starts_with(EXIF_SIGNATURE) {
+                "EXIF".to_string()
+            } else {
+                format!(
+                    "APP1(unknown prefix {:02x?})",
+                    &payload[..payload.len().min(8)]
+                )
+            }
+        }
+        0xE2 => {
+            if payload.starts_with(ISO_SIGNATURE) {
+                "ISO-21496-1".to_string()
+            } else if payload.starts_with(MPF_SIGNATURE) {
+                "MPF".to_string()
+            } else if payload.starts_with(ICC_SIGNATURE) {
+                "ICC".to_string()
+            } else {
+                format!(
+                    "APP2(unknown prefix {:02x?})",
+                    &payload[..payload.len().min(8)]
+                )
+            }
+        }
+        m if (0xE0..=0xEF).contains(&m) => format!("APP{}", m - 0xE0),
+        0xDB => "DQT".to_string(),
+        0xC0 => "SOF0".to_string(),
+        0xC4 => "DHT".to_string(),
+        0xDA => "SOS".to_string(),
+        0xFE => "COM".to_string(),
+        _ => format!("0xFF{:02X}", marker),
+    }
+}
+
+/// Parse all marker segments from a JPEG byte stream until SOS (start of scan).
+/// Returns (segments, offset_after_last_segment).
+fn parse_jpeg_segments(data: &[u8]) -> Vec<JpegSegment> {
+    let mut segments = Vec::new();
+    // Skip SOI (0xFFD8)
+    if data.len() < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+        return segments;
+    }
+    let mut pos = 2;
+
+    while pos + 1 < data.len() {
+        if data[pos] != 0xFF {
+            break;
+        }
+        let marker = data[pos + 1];
+        pos += 2;
+
+        // SOS — stop (scan data follows, not a length-prefixed segment)
+        if marker == 0xDA {
+            break;
+        }
+
+        // Standalone markers (no length): RST, TEM, SOI, EOI
+        if marker == 0x00 || marker == 0x01 || (0xD0..=0xD9).contains(&marker) {
+            continue;
+        }
+
+        // Read 2-byte big-endian length (includes the 2 length bytes themselves)
+        if pos + 1 >= data.len() {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        if seg_len < 2 || pos + seg_len > data.len() {
+            break;
+        }
+        let payload = data[pos + 2..pos + seg_len].to_vec();
+        let label = classify_segment(marker, &payload);
+        segments.push(JpegSegment {
+            marker,
+            label,
+            payload,
+        });
+        pos += seg_len;
+    }
+
+    segments
+}
+
+/// Find the offset of the secondary JPEG (SOI) inside an UltraHDR file.
+/// Strategy: look for the MPF segment and read the secondary image offset,
+/// or fall back to scanning for a second FFD8 after the primary's SOS+scan data.
+fn find_secondary_jpeg_offset(data: &[u8]) -> Option<usize> {
+    // Strategy 1: parse MPF to get the offset of the second image.
+    // MPF stores offsets relative to the start of the MPF APP2 marker.
+    // But for simplicity, let's use strategy 2: find second SOI.
+
+    // After the primary's SOS, scan data ends at EOI (FFD9).
+    // Then the secondary JPEG starts with its own SOI (FFD8).
+    let mut pos = 2; // skip first SOI
+
+    // Walk through the primary JPEG to find EOI
+    while pos + 1 < data.len() {
+        if data[pos] != 0xFF {
+            pos += 1;
+            continue;
+        }
+        let marker = data[pos + 1];
+
+        // Skip SOS: scan data follows until next FFxx (where xx != 00 and not RST)
+        if marker == 0xDA {
+            pos += 2;
+            // Read SOS length and skip its header
+            if pos + 1 < data.len() {
+                let sos_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+                pos += sos_len;
+            }
+            // Scan through entropy-coded data
+            while pos + 1 < data.len() {
+                if data[pos] == 0xFF
+                    && data[pos + 1] != 0x00
+                    && !(0xD0..=0xD7).contains(&data[pos + 1])
+                {
+                    break;
+                }
+                pos += 1;
+            }
+            continue;
+        }
+
+        // EOI: the next SOI would be the secondary JPEG
+        if marker == 0xD9 {
+            pos += 2;
+            if pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xD8 {
+                return Some(pos);
+            }
+            // If not immediately followed by SOI, keep scanning
+            continue;
+        }
+
+        // Other markers with length
+        if marker == 0x00 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            pos += 2;
+            continue;
+        }
+
+        // Length-prefixed segment
+        pos += 2;
+        if pos + 1 >= data.len() {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        if seg_len < 2 || pos + seg_len > data.len() {
+            break;
+        }
+        pos += seg_len;
+    }
+
+    None
+}
+
+/// Format a hex dump of the first N bytes.
+fn hex_preview(data: &[u8], max_bytes: usize) -> String {
+    let n = data.len().min(max_bytes);
+    let hex: Vec<String> = data[..n].iter().map(|b| format!("{:02x}", b)).collect();
+    let suffix = if data.len() > max_bytes { "..." } else { "" };
+    format!("[{}]{}", hex.join(" "), suffix)
+}
+
+/// Compare two byte slices and print detailed differences.
+fn compare_segment_bytes(label: &str, seg_name: &str, rust_payload: &[u8], cpp_payload: &[u8]) {
+    let r_len = rust_payload.len();
+    let c_len = cpp_payload.len();
+
+    if r_len != c_len {
+        println!("  [{label}] {seg_name}: LENGTH MISMATCH Rust={r_len} vs C++={c_len}");
+    }
+
+    let min_len = r_len.min(c_len);
+    let mut first_diff: Option<usize> = None;
+    let mut diff_count = 0usize;
+    for i in 0..min_len {
+        if rust_payload[i] != cpp_payload[i] {
+            diff_count += 1;
+            if first_diff.is_none() {
+                first_diff = Some(i);
+            }
+        }
+    }
+    // Bytes beyond the shorter slice are all different
+    diff_count += r_len.abs_diff(c_len);
+
+    if diff_count == 0 {
+        println!("  [{label}] {seg_name}: MATCH ({r_len} bytes)");
+    } else {
+        println!(
+            "  [{label}] {seg_name}: {diff_count} byte(s) differ (Rust={r_len}B, C++={c_len}B)"
+        );
+        if let Some(fd) = first_diff {
+            println!("    first diff at byte offset {fd}");
+            // Show context around first diff
+            let ctx_start = fd.saturating_sub(4);
+            let ctx_end = (fd + 16).min(min_len);
+            let rust_ctx = &rust_payload[ctx_start..ctx_end];
+            let cpp_ctx = &cpp_payload[ctx_start..ctx_end];
+            println!(
+                "    Rust [{ctx_start}..{ctx_end}]: {}",
+                hex_preview(rust_ctx, 32)
+            );
+            println!(
+                "    C++  [{ctx_start}..{ctx_end}]: {}",
+                hex_preview(cpp_ctx, 32)
+            );
+        }
+        // Also show first 64 bytes of each for overview
+        println!("    Rust first 64B: {}", hex_preview(rust_payload, 64));
+        println!("    C++  first 64B: {}", hex_preview(cpp_payload, 64));
+    }
+}
+
 // ==================== Encoder bit-exact tests ====================
 
 fn run_encoder_bitexact(name: &str, sdr: &[u8], hdr: &[u8], uniform_rgb: bool) {
@@ -735,4 +974,353 @@ fn decoder_bitexact_linear_f16_rust_encoded() {
     let (sdr, hdr) = gen_gradient(W, H);
     let rust_jpeg = rust_encode(&sdr, &hdr);
     run_decoder_bitexact_f16("rust", &rust_jpeg);
+}
+
+// ==================== Metadata bytes diagnostic ====================
+
+/// Diagnostic test: compare raw metadata segment bytes between Rust and C++ encoders.
+///
+/// This test extracts all APP marker segments from both primary and secondary
+/// JPEGs, then does a byte-level comparison. The output shows exactly which
+/// segments differ and where the first byte difference occurs.
+#[test]
+fn metadata_bytes_diagnostic() {
+    const DW: u32 = 128;
+    const DH: u32 = 128;
+
+    // Use a larger image for more realistic metadata
+    let (sdr, hdr) = gen_gradient(DW, DH);
+
+    // Need to temporarily override W/H for encode — but rust_encode/cpp_encode
+    // use the module-level W/H constants. We inline the encode calls here.
+    let rust_jpeg = Encoder::new()
+        .hdr_raw(
+            &hdr,
+            DW,
+            DH,
+            PixelFormat::Rgba1010102,
+            ColorGamut::Bt2100,
+            ColorTransfer::Hlg,
+        )
+        .sdr_raw(&sdr, DW, DH, ColorGamut::Bt709)
+        .quality(95)
+        .gainmap_quality(85)
+        .gainmap_scale(4)
+        .multichannel_gainmap(false)
+        .target_display_peak_nits(1600.0)
+        .encode()
+        .expect("Rust encode failed");
+
+    let cpp_jpeg = unsafe {
+        let enc = uhdr_create_encoder();
+        assert!(!enc.is_null());
+
+        let mut hdr_img = uhdr_raw_image {
+            fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
+            cg: uhdr_color_gamut::UHDR_CG_BT_2100,
+            ct: uhdr_color_transfer::UHDR_CT_HLG,
+            range: uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w: DW,
+            h: DH,
+            planes: [
+                hdr.as_ptr() as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
+            stride: [DW, 0, 0],
+        };
+        let err = uhdr_enc_set_raw_image(enc, &mut hdr_img, uhdr_img_label::UHDR_HDR_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        let mut sdr_img = uhdr_raw_image {
+            fmt: uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
+            cg: uhdr_color_gamut::UHDR_CG_BT_709,
+            ct: uhdr_color_transfer::UHDR_CT_SRGB,
+            range: uhdr_color_range::UHDR_CR_FULL_RANGE,
+            w: DW,
+            h: DH,
+            planes: [
+                sdr.as_ptr() as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
+            stride: [DW, 0, 0],
+        };
+        let err = uhdr_enc_set_raw_image(enc, &mut sdr_img, uhdr_img_label::UHDR_SDR_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        let err = uhdr_enc_set_quality(enc, 95, uhdr_img_label::UHDR_BASE_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_quality(enc, 85, uhdr_img_label::UHDR_GAIN_MAP_IMG);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_using_multi_channel_gainmap(enc, 0);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_gainmap_scale_factor(enc, 4);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+        let err = uhdr_enc_set_target_display_peak_brightness(enc, 1600.0);
+        assert_eq!(err.error_code, uhdr_codec_err::UHDR_CODEC_OK);
+
+        let err = uhdr_encode(enc);
+        assert_eq!(
+            err.error_code,
+            uhdr_codec_err::UHDR_CODEC_OK,
+            "C++ encode failed"
+        );
+
+        let stream = uhdr_get_encoded_stream(enc);
+        assert!(!stream.is_null());
+        let data = std::slice::from_raw_parts((*stream).data as *const u8, (*stream).data_sz);
+        let result = data.to_vec();
+        uhdr_release_encoder(enc);
+        result
+    };
+
+    println!("\n{}", "=".repeat(70));
+    println!("  METADATA BYTES DIAGNOSTIC");
+    println!(
+        "  Rust output: {} bytes, C++ output: {} bytes",
+        rust_jpeg.len(),
+        cpp_jpeg.len()
+    );
+    println!("{}", "=".repeat(70));
+
+    // --- Primary JPEG segments ---
+    let rust_primary_segs = parse_jpeg_segments(&rust_jpeg);
+    let cpp_primary_segs = parse_jpeg_segments(&cpp_jpeg);
+
+    println!("\n--- PRIMARY JPEG segments ---");
+    println!(
+        "  Rust: {} segments, C++: {} segments",
+        rust_primary_segs.len(),
+        cpp_primary_segs.len()
+    );
+
+    println!("\n  Rust primary segments:");
+    for (i, seg) in rust_primary_segs.iter().enumerate() {
+        println!(
+            "    [{i}] 0xFF{:02X} {} ({} bytes)",
+            seg.marker,
+            seg.label,
+            seg.payload.len()
+        );
+    }
+    println!("  C++ primary segments:");
+    for (i, seg) in cpp_primary_segs.iter().enumerate() {
+        println!(
+            "    [{i}] 0xFF{:02X} {} ({} bytes)",
+            seg.marker,
+            seg.label,
+            seg.payload.len()
+        );
+    }
+
+    // Match segments by label and compare
+    println!("\n  Primary segment comparison:");
+    let metadata_labels = ["XMP", "ISO-21496-1", "MPF", "ICC", "EXIF"];
+    let mut any_primary_diff = false;
+
+    for target_label in &metadata_labels {
+        let rust_seg = rust_primary_segs.iter().find(|s| s.label == *target_label);
+        let cpp_seg = cpp_primary_segs.iter().find(|s| s.label == *target_label);
+
+        match (rust_seg, cpp_seg) {
+            (Some(rs), Some(cs)) => {
+                compare_segment_bytes("primary", target_label, &rs.payload, &cs.payload);
+                if rs.payload != cs.payload {
+                    any_primary_diff = true;
+                }
+            }
+            (Some(rs), None) => {
+                println!(
+                    "  [primary] {target_label}: ONLY IN RUST ({} bytes)",
+                    rs.payload.len()
+                );
+                any_primary_diff = true;
+            }
+            (None, Some(cs)) => {
+                println!(
+                    "  [primary] {target_label}: ONLY IN C++ ({} bytes)",
+                    cs.payload.len()
+                );
+                any_primary_diff = true;
+            }
+            (None, None) => {}
+        }
+    }
+
+    // Also compare non-metadata segments (DQT, SOF, DHT) for completeness
+    println!("\n  Primary non-metadata segment comparison:");
+    let structure_labels = ["DQT", "SOF0", "DHT"];
+    for target_label in &structure_labels {
+        let rust_segs: Vec<_> = rust_primary_segs
+            .iter()
+            .filter(|s| s.label == *target_label)
+            .collect();
+        let cpp_segs: Vec<_> = cpp_primary_segs
+            .iter()
+            .filter(|s| s.label == *target_label)
+            .collect();
+        if rust_segs.len() != cpp_segs.len() {
+            println!(
+                "  [primary] {target_label}: COUNT MISMATCH Rust={} vs C++={}",
+                rust_segs.len(),
+                cpp_segs.len()
+            );
+        }
+        for (i, (rs, cs)) in rust_segs.iter().zip(cpp_segs.iter()).enumerate() {
+            let sub_label = if rust_segs.len() > 1 {
+                format!("{target_label}[{i}]")
+            } else {
+                target_label.to_string()
+            };
+            compare_segment_bytes("primary", &sub_label, &rs.payload, &cs.payload);
+        }
+    }
+
+    // --- Secondary JPEG segments ---
+    println!("\n--- SECONDARY JPEG (gain map) segments ---");
+    let rust_secondary_offset = find_secondary_jpeg_offset(&rust_jpeg);
+    let cpp_secondary_offset = find_secondary_jpeg_offset(&cpp_jpeg);
+
+    println!(
+        "  Rust secondary offset: {:?}, C++ secondary offset: {:?}",
+        rust_secondary_offset, cpp_secondary_offset
+    );
+
+    let mut any_secondary_diff = false;
+
+    match (rust_secondary_offset, cpp_secondary_offset) {
+        (Some(ro), Some(co)) => {
+            let rust_secondary = &rust_jpeg[ro..];
+            let cpp_secondary = &cpp_jpeg[co..];
+
+            let rust_sec_segs = parse_jpeg_segments(rust_secondary);
+            let cpp_sec_segs = parse_jpeg_segments(cpp_secondary);
+
+            println!(
+                "  Rust: {} segments, C++: {} segments",
+                rust_sec_segs.len(),
+                cpp_sec_segs.len()
+            );
+
+            println!("\n  Rust secondary segments:");
+            for (i, seg) in rust_sec_segs.iter().enumerate() {
+                println!(
+                    "    [{i}] 0xFF{:02X} {} ({} bytes)",
+                    seg.marker,
+                    seg.label,
+                    seg.payload.len()
+                );
+            }
+            println!("  C++ secondary segments:");
+            for (i, seg) in cpp_sec_segs.iter().enumerate() {
+                println!(
+                    "    [{i}] 0xFF{:02X} {} ({} bytes)",
+                    seg.marker,
+                    seg.label,
+                    seg.payload.len()
+                );
+            }
+
+            println!("\n  Secondary segment comparison:");
+            for target_label in &metadata_labels {
+                let rust_seg = rust_sec_segs.iter().find(|s| s.label == *target_label);
+                let cpp_seg = cpp_sec_segs.iter().find(|s| s.label == *target_label);
+
+                match (rust_seg, cpp_seg) {
+                    (Some(rs), Some(cs)) => {
+                        compare_segment_bytes("secondary", target_label, &rs.payload, &cs.payload);
+                        if rs.payload != cs.payload {
+                            any_secondary_diff = true;
+                        }
+                    }
+                    (Some(rs), None) => {
+                        println!(
+                            "  [secondary] {target_label}: ONLY IN RUST ({} bytes)",
+                            rs.payload.len()
+                        );
+                        any_secondary_diff = true;
+                    }
+                    (None, Some(cs)) => {
+                        println!(
+                            "  [secondary] {target_label}: ONLY IN C++ ({} bytes)",
+                            cs.payload.len()
+                        );
+                        any_secondary_diff = true;
+                    }
+                    (None, None) => {}
+                }
+            }
+
+            // Compare structure segments in secondary too
+            println!("\n  Secondary non-metadata segment comparison:");
+            for target_label in &structure_labels {
+                let rust_segs: Vec<_> = rust_sec_segs
+                    .iter()
+                    .filter(|s| s.label == *target_label)
+                    .collect();
+                let cpp_segs: Vec<_> = cpp_sec_segs
+                    .iter()
+                    .filter(|s| s.label == *target_label)
+                    .collect();
+                if rust_segs.len() != cpp_segs.len() {
+                    println!(
+                        "  [secondary] {target_label}: COUNT MISMATCH Rust={} vs C++={}",
+                        rust_segs.len(),
+                        cpp_segs.len()
+                    );
+                }
+                for (i, (rs, cs)) in rust_segs.iter().zip(cpp_segs.iter()).enumerate() {
+                    let sub_label = if rust_segs.len() > 1 {
+                        format!("{target_label}[{i}]")
+                    } else {
+                        target_label.to_string()
+                    };
+                    compare_segment_bytes("secondary", &sub_label, &rs.payload, &cs.payload);
+                }
+            }
+        }
+        (None, Some(_)) => {
+            println!("  ERROR: Secondary JPEG not found in Rust output!");
+            any_secondary_diff = true;
+        }
+        (Some(_), None) => {
+            println!("  ERROR: Secondary JPEG not found in C++ output!");
+            any_secondary_diff = true;
+        }
+        (None, None) => {
+            println!("  ERROR: Secondary JPEG not found in either output!");
+            any_secondary_diff = true;
+        }
+    }
+
+    // --- Summary ---
+    println!("\n{}", "=".repeat(70));
+    println!("  SUMMARY");
+    println!(
+        "  Primary metadata:   {}",
+        if any_primary_diff { "DIFFERS" } else { "MATCH" }
+    );
+    println!(
+        "  Secondary metadata: {}",
+        if any_secondary_diff {
+            "DIFFERS"
+        } else {
+            "MATCH"
+        }
+    );
+    println!("{}", "=".repeat(70));
+
+    // Assert so the test fails when there are differences (diagnostic purpose)
+    if any_primary_diff || any_secondary_diff {
+        panic!(
+            "Metadata byte differences found: primary={}, secondary={}. See output above for details.",
+            if any_primary_diff { "DIFFERS" } else { "match" },
+            if any_secondary_diff {
+                "DIFFERS"
+            } else {
+                "match"
+            },
+        );
+    }
 }
