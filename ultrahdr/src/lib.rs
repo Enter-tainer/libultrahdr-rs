@@ -1,28 +1,20 @@
-//! Safe Rust bindings for Google's [`libultrahdr`](https://github.com/google/libultrahdr),
-//! the reference implementation of UltraHDR gain-map JPEG encoding/decoding.
+//! Pure Rust implementation of UltraHDR gain-map JPEG encoding/decoding.
 //!
-//! The crate exposes a small, stateful API that mirrors the C library while handling
-//! memory ownership and validation for you:
-//! - [`Decoder`] reads JPEGs, exposes gain-map metadata (if present), and produces packed
-//!   pixel views.
-//! - [`Encoder`] writes UltraHDR or plain JPEGs from packed pixel buffers or compressed
-//!   inputs.
-//! - [`RawImage`], [`CompressedImage`], and [`DecodedPackedView`] describe image buffers
-//!   without requiring you to depend on [`sys`] directly.
-//!
-//! For a higher-level walkthrough, see `examples/ultrahdr_app.rs` in this crate and the
-//! CLI in the companion `ultrahdr-bake` package.
+//! This crate provides:
+//! - Color space conversion utilities (sRGB, PQ, HLG, linear)
+//! - Gain map metadata (ISO 21496-1) reading and writing
 
-/// Low-level bindings to `libultrahdr`. Most users should favor the safe wrappers
-/// re-exported from this crate.
-pub use ultrahdr_sys as sys;
+pub mod color;
+pub mod decoder;
+pub mod encoder;
+pub mod error;
+pub mod gainmap;
+pub mod jpeg;
+pub mod mpf;
+pub mod types;
 
-mod decoder;
-mod encoder;
-mod error;
-mod types;
+#[cfg(feature = "simd")]
+pub(crate) mod simd;
 
-pub use decoder::Decoder;
-pub use encoder::Encoder;
 pub use error::{Error, Result};
 pub use types::*;

@@ -16,13 +16,7 @@ exclude = [
 ]
 
 [features]
-default = ["vendored", "iso21496", "jpeg-max-dimension"]
-vendored = ["ultrahdr/vendored"]
-shared = ["ultrahdr/shared"]
-gles = ["ultrahdr/gles"]
-iso21496 = ["ultrahdr/iso21496"]
-no-threads = ["ultrahdr/no-threads"]
-jpeg-max-dimension = ["ultrahdr/jpeg-max-dimension"]
+default = []
 
 [dependencies]
 ultrahdr = { workspace = true }
