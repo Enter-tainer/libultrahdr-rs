@@ -453,6 +453,20 @@ fn apply_gainmap_inner(
         lut[idx.min(max_idx)]
     }
 
+    // Create SIMD arch once outside the row loop (avoids per-row CPUID check).
+    #[cfg(feature = "simd")]
+    let simd_arch = pulp::Arch::new();
+
+    // Pre-compute offsets for SIMD path: single-channel uses offset[0] for all channels.
+    #[cfg(feature = "simd")]
+    let (simd_off_sdr, simd_off_hdr) = if multi_channel {
+        (gain_lut.offset_sdr(), gain_lut.offset_hdr())
+    } else {
+        let s = gain_lut.offset_sdr();
+        let h = gain_lut.offset_hdr();
+        ([s[0]; 3], [h[0]; 3])
+    };
+
     // Process a single row of pixels. All read-only data is shared by reference.
     #[cfg(feature = "simd")]
     let process_row = |y: usize, row_out: &mut [u8]| {
@@ -563,17 +577,16 @@ fn apply_gainmap_inner(
         }
 
         // Pass 2 (SIMD): apply gain = (lin + offset_sdr) * factor - offset_hdr
-        let off_sdr = gain_lut.offset_sdr();
-        let off_hdr = gain_lut.offset_hdr();
         crate::simd::apply_gain_simd(
+            simd_arch,
             &r_lin_buf,
             &g_lin_buf,
             &b_lin_buf,
             &factor_r_buf,
             &factor_g_buf,
             &factor_b_buf,
-            &off_sdr,
-            &off_hdr,
+            &simd_off_sdr,
+            &simd_off_hdr,
             &mut hdr_r_buf,
             &mut hdr_g_buf,
             &mut hdr_b_buf,
@@ -582,9 +595,9 @@ fn apply_gainmap_inner(
         // Pass 3: transfer function
         match output_transfer {
             ColorTransfer::Linear => {
-                crate::simd::clamp_simd(&mut hdr_r_buf, 0.0, MAX_LINEAR);
-                crate::simd::clamp_simd(&mut hdr_g_buf, 0.0, MAX_LINEAR);
-                crate::simd::clamp_simd(&mut hdr_b_buf, 0.0, MAX_LINEAR);
+                crate::simd::clamp_simd(simd_arch, &mut hdr_r_buf, 0.0, MAX_LINEAR);
+                crate::simd::clamp_simd(simd_arch, &mut hdr_g_buf, 0.0, MAX_LINEAR);
+                crate::simd::clamp_simd(simd_arch, &mut hdr_b_buf, 0.0, MAX_LINEAR);
             }
             ColorTransfer::Srgb => {
                 for x in 0..sdr_width {

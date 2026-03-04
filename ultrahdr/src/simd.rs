@@ -73,6 +73,7 @@ impl WithSimd for ClampOp<'_> {
 /// Apply gain map using SIMD: `(lin + offset_sdr) * factor - offset_hdr` per channel.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_gain_simd(
+    arch: Arch,
     r_lin: &[f32],
     g_lin: &[f32],
     b_lin: &[f32],
@@ -85,7 +86,6 @@ pub(crate) fn apply_gain_simd(
     hdr_g: &mut [f32],
     hdr_b: &mut [f32],
 ) {
-    let arch = Arch::new();
     arch.dispatch(ApplyGainChannel {
         lin: r_lin,
         factor: factor_r,
@@ -110,8 +110,7 @@ pub(crate) fn apply_gain_simd(
 }
 
 /// Clamp all values in `data` to `[min, max]` using SIMD.
-pub(crate) fn clamp_simd(data: &mut [f32], min: f32, max: f32) {
-    let arch = Arch::new();
+pub(crate) fn clamp_simd(arch: Arch, data: &mut [f32], min: f32, max: f32) {
     arch.dispatch(ClampOp { data, min, max });
 }
 
@@ -136,6 +135,7 @@ mod tests {
         let mut hdr_b = vec![0.0_f32; n];
 
         apply_gain_simd(
+            Arch::new(),
             &r_lin,
             &g_lin,
             &b_lin,
@@ -177,7 +177,7 @@ mod tests {
         let mut data: Vec<f32> = vec![-1.0, 0.0, 0.5, 1.0, 1.5, 2.0, -0.5, 0.3, 0.7, 1.2, 3.0];
         let expected: Vec<f32> = data.iter().map(|&x| x.clamp(0.0, 1.0)).collect();
 
-        clamp_simd(&mut data, 0.0, 1.0);
+        clamp_simd(Arch::new(), &mut data, 0.0, 1.0);
 
         for (i, (&got, &exp)) in data.iter().zip(expected.iter()).enumerate() {
             assert!(
@@ -192,12 +192,15 @@ mod tests {
         let offset_sdr = [0.1_f32, 0.2, 0.3];
         let offset_hdr = [0.01_f32, 0.02, 0.03];
 
+        let arch = Arch::new();
+
         // Empty slices (n=0)
         {
             let mut hdr_r = vec![];
             let mut hdr_g = vec![];
             let mut hdr_b = vec![];
             apply_gain_simd(
+                arch,
                 &[],
                 &[],
                 &[],
@@ -225,6 +228,7 @@ mod tests {
             let mut hdr_b = vec![0.0_f32; 1];
 
             apply_gain_simd(
+                arch,
                 &r,
                 &g,
                 &b,
@@ -260,6 +264,7 @@ mod tests {
             let mut hdr_b = vec![0.0_f32; n];
 
             apply_gain_simd(
+                arch,
                 &r,
                 &g,
                 &b,
