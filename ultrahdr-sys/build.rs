@@ -157,6 +157,10 @@ fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathB
     work_src
 }
 
+fn is_wasm_target(target: &str) -> bool {
+    target.starts_with("wasm32-")
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let source_dir = locate_src_dir(&manifest_dir);
@@ -211,8 +215,7 @@ fn main() {
     let target = env::var("TARGET").expect("TARGET");
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let target_family = env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
-    let is_wasm = target_family == "wasm";
+    let is_wasm = is_wasm_target(&target);
     let wasi = wasi_toolchain();
 
     let mut cfg = cmake::Config::new(&src_dir);
@@ -349,10 +352,10 @@ fn main() {
                     "cargo:rustc-link-search=native={}/share/wasi-sysroot/lib/wasm32-wasip1",
                     prefix.display()
                 );
+                println!("cargo:rustc-link-lib=static=c++");
+                println!("cargo:rustc-link-lib=static=c++abi");
+                println!("cargo:rustc-link-lib=static=setjmp");
             }
-            println!("cargo:rustc-link-lib=static=c++");
-            println!("cargo:rustc-link-lib=static=c++abi");
-            println!("cargo:rustc-link-lib=static=setjmp");
         } else {
             let cxx_stdlib = if target_os == "macos" {
                 "c++"
