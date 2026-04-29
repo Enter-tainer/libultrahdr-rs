@@ -281,6 +281,15 @@ fn main() {
             "OFF"
         },
     );
+    // Control XMP gain map metadata emission via feature flag (default ON).
+    cfg.define(
+        "UHDR_WRITE_XMP",
+        if cfg!(feature = "xmp") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
     if disable_threads {
         cfg.define("UHDR_DISABLE_THREADS", "ON");
     }
