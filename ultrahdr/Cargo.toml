@@ -16,12 +16,11 @@ exclude = [
 ]
 
 [features]
-default = ["vendored", "iso21496", "xmp"]
+default = ["vendored", "iso21496"]
 vendored = ["ultrahdr-sys/vendored"]
 shared = ["ultrahdr-sys/shared"]
 gles = ["ultrahdr-sys/gles"]
 iso21496 = ["ultrahdr-sys/iso21496"]
-xmp = ["ultrahdr-sys/xmp"]
 no-threads = ["ultrahdr-sys/no-threads"]
 jpeg-max-dimension = ["ultrahdr-sys/jpeg-max-dimension"]
 

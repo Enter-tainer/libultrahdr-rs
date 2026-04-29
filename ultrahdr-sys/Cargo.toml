@@ -20,7 +20,7 @@ exclude = [
 ]
 
 [features]
-default = ["vendored", "iso21496", "xmp"]
+default = ["vendored", "iso21496"]
 # Build libjpeg-turbo and other deps from source via upstream CMake flag.
 vendored = []
 # Link shared library instead of static.
@@ -29,10 +29,6 @@ shared = []
 gles = []
 # Enable writing ISO/TS 21496-1 gain map metadata.
 iso21496 = []
-# Enable writing XMP gain map metadata (GContainer + hdrgm namespace).
-# Required for compatibility with Samsung Gallery and other apps that
-# only recognize the XMP-based Ultra HDR v1.0 format.
-xmp = []
 # Disable std::thread usage in upstream build (single-threaded).
 no-threads = []
 # Raise UHDR_MAX_DIMENSION to libjpeg-turbo's JPEG_MAX_DIMENSION.
