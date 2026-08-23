@@ -153,6 +153,21 @@ fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathB
     let _ = fs::remove_dir_all(out_dir.join("build"));
     let _ = fs::remove_dir_all(&work_src);
     copy_dir_recursive(src_dir, &work_src).expect("failed to copy libultrahdr sources");
+    // Normalize the line endings of the files `patches/` touches to LF. The
+    // upstream v2.0+ tree carries a few CRLF lines; embed them byte-for-byte in
+    // the patch and Strawberry's old `patch.exe` (used on Windows CI) chokes,
+    // and `git apply` on any platform is line-ending strict. Normalizing keeps
+    // the patch portable across git configs (core.autocrlf) and patch tools.
+    for rel in ["CMakeLists.txt", "lib/src/jpegr.cpp"] {
+        let p = work_src.join(rel);
+        if let Ok(contents) = fs::read(&p) {
+            let text = String::from_utf8_lossy(&contents);
+            let normalized = text.replace("\r\n", "\n");
+            if normalized.as_bytes() != contents.as_slice() {
+                let _ = fs::write(&p, normalized.as_bytes());
+            }
+        }
+    }
     apply_local_patches(manifest_dir, &work_src);
     work_src
 }
@@ -211,6 +226,23 @@ fn main() {
     println!("cargo:rerun-if-changed={}", patch_path.display());
 
     let src_dir = prepare_src_dir(&manifest_dir, &source_dir, &out_dir);
+
+    // CMake's FetchContent (libheif, libsmpte2094-50) runs a *nested* `cargo
+    // build` on upstream's bundled Rust crates. When the outer build is
+    // `cargo clippy`, those nested builds inherit clippy's driver and fail on
+    // upstream lints enabled by `-D warnings`. Rebuild them with plain rustc by
+    // stripping clippy-only env vars for the C/CMake process.
+    for var in [
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CLIPPY_ARGS",
+    ] {
+        // SAFETY: removing vars from the process env is safe here; a build
+        // script does not spawn threads that would race on the env (and the
+        // cmake crate already spawns the child process separately).
+        unsafe { env::remove_var(var) };
+    }
 
     let target = env::var("TARGET").expect("TARGET");
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -272,6 +304,26 @@ fn main() {
     if cfg!(feature = "gles") {
         cfg.define("UHDR_ENABLE_GLES", "ON");
     }
+    // Control HEIF/AVIF container support via libheif. NOTE: upstream v2.0+
+    // defaults UHDR_ENABLE_HEIF to ON, so we must explicitly disable it unless
+    // the `heif` feature is requested; otherwise the default vendored build
+    // would fetch and build libheif as a dependency.
+    cfg.define(
+        "UHDR_ENABLE_HEIF",
+        if cfg!(feature = "heif") { "ON" } else { "OFF" },
+    );
+    // Control SMPTE ST 2094-50 (AGTM) dynamic metadata support. This is only
+    // built when `vendored` is enabled upstream (FetchContent clones
+    // webmproject/libsmpte2094-50 v0.1.4); with UHDR_BUILD_DEPS=OFF it is
+    // skipped with a warning and disabled.
+    cfg.define(
+        "UHDR_ENABLE_SMPTE2094_50",
+        if cfg!(feature = "smpte2094-50") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
     // Control ISO 21496-1 metadata emission via feature flag (default ON).
     cfg.define(
         "UHDR_WRITE_ISO",
@@ -341,6 +393,46 @@ fn main() {
         println!("cargo:rustc-link-lib=static={}", jpeg_name);
     } else {
         println!("cargo:rustc-link-lib=jpeg");
+    }
+
+    // When HEIF/AVIF support is enabled, the upstream CMake builds libheif as a
+    // static ExternalProject (vendored) or links a system libheif (non-vendored).
+    // `uhdr`/`core` link it PRIVATE, so the final Rust executable must pull it in.
+    if cfg!(feature = "heif") {
+        if cfg!(feature = "vendored") {
+            // Bundled libheif static archive (non-multi build) lives at
+            // <dst>/build/libheif/src/libheif-build/libheif/libheif.a
+            println!(
+                "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif",
+                dst.display()
+            );
+            if target_env == "msvc" {
+                println!(
+                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Release",
+                    dst.display()
+                );
+                println!(
+                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Debug",
+                    dst.display()
+                );
+            }
+            println!("cargo:rustc-link-lib=static=heif");
+        } else {
+            println!("cargo:rustc-link-lib=heif");
+        }
+    }
+
+    // SMPTE ST 2094-50 (AGTM) is provided by a FetchContent static library that
+    // `uhdr`/`core` link PRIVATE, so expose it to the final link too. The
+    // FetchContent build only runs when `vendored` (UHDR_BUILD_DEPS=ON) is set;
+    // without it upstream warns and disables SMPTE, so don't emit a bogus -l.
+    if cfg!(feature = "smpte2094-50") && cfg!(feature = "vendored") {
+        // FetchContent defaults to <dst>/build/_deps/libsmpte2094_50-build.
+        println!(
+            "cargo:rustc-link-search=native={}/build/_deps/libsmpte2094_50-build",
+            dst.display()
+        );
+        println!("cargo:rustc-link-lib=static=smpte2094_50_utils");
     }
 
     let link_name = if target_env == "msvc" && !build_shared {
