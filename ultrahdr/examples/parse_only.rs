@@ -15,7 +15,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let layout = parse_ultra_hdr(&mut bytes)?;
     println!("container: {:?}", layout.container);
-    println!("base bytes: {}", layout.base_image.len());
     println!("gainmap bytes: {}", layout.gainmap_image.len());
     println!("image dims: {}x{}", layout.width, layout.height);
     println!(

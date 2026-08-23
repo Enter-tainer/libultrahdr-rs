@@ -144,7 +144,6 @@ impl Decoder {
     /// parameters. See [`ParsedUltraHdr`].
     pub fn parse_layout(&mut self) -> Result<ParsedUltraHdr> {
         self.probe()?;
-        let base_image = self.base_image().map(|s| s.to_vec()).unwrap_or_default();
         let gainmap_image = self.gainmap_image().map(|s| s.to_vec()).unwrap_or_default();
         let gainmap_metadata = self.gainmap_metadata()?;
         let exif = self.exif().map(|s| s.to_vec());
@@ -153,7 +152,6 @@ impl Decoder {
             // The Decoder doesn't hold the input bytes, so the container is not
             // known here. Use the top-level [`parse_ultra_hdr`] to get it detected.
             container: UltraHdrContainer::Unknown,
-            base_image,
             gainmap_image,
             gainmap_metadata,
             width: self.image_width() as u32,

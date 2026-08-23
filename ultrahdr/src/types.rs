@@ -352,8 +352,6 @@ pub enum UltraHdrContainer {
 pub struct ParsedUltraHdr {
     /// Container/codec the input file uses (detected from the bytes).
     pub container: UltraHdrContainer,
-    /// SDR base image, as JPEG bytes.
-    pub base_image: Vec<u8>,
     /// Embedded gain-map image, as JPEG bytes.
     pub gainmap_image: Vec<u8>,
     /// Gain-map parameters for the renderer/shader, when the container carries them.
