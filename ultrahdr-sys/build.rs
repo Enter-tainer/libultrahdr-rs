@@ -158,10 +158,7 @@ fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathB
     // the patch and Strawberry's old `patch.exe` (used on Windows CI) chokes,
     // and `git apply` on any platform is line-ending strict. Normalizing keeps
     // the patch portable across git configs (core.autocrlf) and patch tools.
-    for rel in [
-        "CMakeLists.txt",
-        "lib/src/jpegr.cpp",
-    ] {
+    for rel in ["CMakeLists.txt", "lib/src/jpegr.cpp"] {
         let p = work_src.join(rel);
         if let Ok(contents) = fs::read(&p) {
             let text = String::from_utf8_lossy(&contents);
