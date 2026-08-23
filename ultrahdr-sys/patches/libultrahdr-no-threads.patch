@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 5128335..d8f3f4e 100644
+index a6ed814..6b87bf4 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -28,16 +28,22 @@ project(libuhdr
+@@ -22,16 +22,22 @@ project(libuhdr
  ###########################################################
  # Detect system
  ###########################################################
@@ -29,7 +29,7 @@ index 5128335..d8f3f4e 100644
  if(CMAKE_SYSTEM_PROCESSOR MATCHES "amd64.*|x86_64.*|AMD64.*")
    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
      set(ARCH "amd64")
-@@ -60,6 +66,8 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^riscv32")
+@@ -54,6 +60,8 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^riscv32")
    set(ARCH "riscv32")
  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^loongarch64")
    set(ARCH "loong64")
@@ -38,10 +38,10 @@ index 5128335..d8f3f4e 100644
  else()
    message(FATAL_ERROR "Architecture: ${CMAKE_SYSTEM_PROCESSOR} not recognized")
  endif()
-@@ -132,6 +140,11 @@ option_if_not_defined(UHDR_ENABLE_INSTALL "Enable install and uninstall targets
- option_if_not_defined(UHDR_ENABLE_INTRINSICS "Build with SIMD acceleration " TRUE)
- option_if_not_defined(UHDR_ENABLE_GLES "Build with GPU acceleration " FALSE)
+@@ -128,6 +136,11 @@ option_if_not_defined(UHDR_ENABLE_GLES "Build with GPU acceleration " FALSE)
  option_if_not_defined(UHDR_ENABLE_WERROR "Build with -Werror" FALSE)
+ option_if_not_defined(UHDR_ENABLE_SMPTE2094_50 "Build with SMPTE 2094-50 support" FALSE)
+ option_if_not_defined(UHDR_ENABLE_HEIF "Build with HEIF/AVIF support via libheif" TRUE)
 +set(UHDR_DISABLE_THREADS_DEFAULT FALSE)
 +if(UHDR_TARGET_WASI)
 +  set(UHDR_DISABLE_THREADS_DEFAULT TRUE)
@@ -50,7 +50,7 @@ index 5128335..d8f3f4e 100644
  
  # These options effect only encoding process.
  # Decoding continues to support both iso and xmp irrespective of this configuration.
-@@ -139,12 +152,16 @@ option_if_not_defined(UHDR_ENABLE_WERROR "Build with -Werror" FALSE)
+@@ -135,12 +148,16 @@ option_if_not_defined(UHDR_ENABLE_HEIF "Build with HEIF/AVIF support via libheif
  option_if_not_defined(UHDR_WRITE_XMP "Write gainmap metadata in XMP packet" FALSE)
  option_if_not_defined(UHDR_WRITE_ISO "Write gainmap metadata in ISO 21496_1 packet" TRUE)
  
@@ -69,7 +69,7 @@ index 5128335..d8f3f4e 100644
    message(FATAL_ERROR "Building benchmarks not supported for wasm targets")
  endif()
  
-@@ -178,6 +195,10 @@ if(EMSCRIPTEN AND BUILD_SHARED_LIBS)
+@@ -174,6 +191,10 @@ if(EMSCRIPTEN AND BUILD_SHARED_LIBS)
    set(BUILD_SHARED_LIBS FALSE)
    message(STATUS "For wasm targets, build and use static libraries")
  endif()
@@ -80,7 +80,7 @@ index 5128335..d8f3f4e 100644
  
  if(MSVC AND (UHDR_BUILD_DEPS OR UHDR_BUILD_TESTS OR UHDR_BUILD_BENCHMARK) AND BUILD_SHARED_LIBS)
    # ExternalProject_Add() for jpeg, gtest, google benchmarks is configured to build static libraries
-@@ -265,6 +286,12 @@ if(MSVC)
+@@ -264,6 +285,12 @@ if(MSVC)
    add_compile_options(/wd4305) # truncation from 'double' to 'float'
    add_compile_options(/wd4838) # conversion from 'type1' to 'type2' requires a narrowing conversion
    add_compile_options(/wd26812) # Prefer enum class over enum
@@ -93,7 +93,7 @@ index 5128335..d8f3f4e 100644
  elseif(EMSCRIPTEN)
    if(NOT UHDR_BUILD_DEPS)
      include(CheckCSourceCompiles)
-@@ -374,9 +401,11 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+@@ -373,9 +400,11 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
  endif()
  
  # Threads
@@ -108,7 +108,7 @@ index 5128335..d8f3f4e 100644
  
  include(ExternalProject)
  
-@@ -488,6 +517,10 @@ if(NOT JPEG_FOUND)
+@@ -516,6 +545,10 @@ if(NOT JPEG_FOUND)
          INSTALL_COMMAND ""
      )
    else()
@@ -119,16 +119,16 @@ index 5128335..d8f3f4e 100644
      ExternalProject_Add(${JPEGTURBO_TARGET_NAME}
          GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
          GIT_TAG 3.1.0
-@@ -495,7 +528,7 @@ if(NOT JPEG_FOUND)
+@@ -523,7 +556,7 @@ if(NOT JPEG_FOUND)
          SOURCE_DIR ${JPEGTURBO_SOURCE_DIR}
          BINARY_DIR ${JPEGTURBO_BINARY_DIR}
          BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG> --target jpeg-static
--        CMAKE_ARGS ${UHDR_CMAKE_ARGS} -DENABLE_SHARED=0
-+        CMAKE_ARGS ${JPEGTURBO_ARGS} -DENABLE_SHARED=0
+-        CMAKE_ARGS ${UHDR_CMAKE_ARGS} -DENABLE_SHARED=0 -DWITH_CRT_DLL=ON
++        CMAKE_ARGS ${JPEGTURBO_ARGS} -DENABLE_SHARED=0 -DWITH_CRT_DLL=ON
          BUILD_BYPRODUCTS ${JPEG_LIBRARIES}
          INSTALL_COMMAND ""
      )
-@@ -604,7 +637,10 @@ file(GLOB UHDR_BM_SRCS_LIST "${BENCHMARK_DIR}/*.cpp")
+@@ -632,7 +665,10 @@ file(GLOB UHDR_BM_SRCS_LIST "${BENCHMARK_DIR}/*.cpp")
  file(GLOB IMAGE_IO_SRCS_LIST "${THIRD_PARTY_DIR}/image_io/src/**/*.cc")
  
  set(PRIVATE_INCLUDE_DIR ${SOURCE_DIR}/include/ ${JPEG_INCLUDE_DIRS})
@@ -137,10 +137,10 @@ index 5128335..d8f3f4e 100644
 +if(NOT UHDR_DISABLE_THREADS)
 +  list(APPEND PRIVATE_LINK_LIBS Threads::Threads)
 +endif()
- if(UHDR_ENABLE_GLES)
-   list(APPEND PRIVATE_INCLUDE_DIR ${EGL_INCLUDE_DIRS} ${OPENGLES3_INCLUDE_DIRS})
-   list(APPEND PRIVATE_LINK_LIBS ${EGL_LIBRARIES} ${OPENGLES3_LIBRARIES})
-@@ -623,6 +659,9 @@ target_include_directories(${IMAGEIO_TARGET_NAME} PRIVATE
+ if(UHDR_ENABLE_SMPTE2094_50)
+   list(APPEND PRIVATE_LINK_LIBS smpte2094_50_utils)
+ endif()
+@@ -752,6 +788,9 @@ target_include_directories(${IMAGEIO_TARGET_NAME} PRIVATE
  set(UHDR_CORE_LIB_NAME core)
  add_library(${UHDR_CORE_LIB_NAME} STATIC ${UHDR_CORE_SRCS_LIST})
  target_compile_options(${UHDR_CORE_LIB_NAME} PRIVATE ${UHDR_WERROR_FLAGS})
@@ -151,10 +151,10 @@ index 5128335..d8f3f4e 100644
    add_dependencies(${UHDR_CORE_LIB_NAME} ${JPEGTURBO_TARGET_NAME})
  endif()
 diff --git a/lib/src/jpegr.cpp b/lib/src/jpegr.cpp
-index 284697f..6b6f898 100644
+index aeae7bd..b86ecb0 100644
 --- a/lib/src/jpegr.cpp
 +++ b/lib/src/jpegr.cpp
-@@ -21,11 +21,16 @@
+@@ -15,11 +15,16 @@
  #include <unistd.h>
  #endif
  
@@ -172,7 +172,7 @@ index 284697f..6b6f898 100644
  
  #include "ultrahdr/editorhelper.h"
  #include "ultrahdr/gainmapmetadata.h"
-@@ -71,6 +76,7 @@ static const string kIsoNameSpace = "urn:iso:std:iso:ts:21496:-1";
+@@ -65,6 +70,7 @@ static const string kIsoNameSpace = "urn:iso:std:iso:ts:21496:-1";
  static_assert(kWriteXmpMetadata || kWriteIso21496_1Metadata,
                "Must write gain map metadata in XMP format, or iso 21496-1 format, or both.");
  
@@ -180,7 +180,7 @@ index 284697f..6b6f898 100644
  class JobQueue {
   public:
    bool dequeueJob(unsigned int& rowStart, unsigned int& rowEnd);
-@@ -124,6 +130,28 @@ void JobQueue::reset() {
+@@ -118,6 +124,28 @@ void JobQueue::reset() {
    mJobs.clear();
    mQueuedAllJobs = false;
  }
@@ -209,7 +209,7 @@ index 284697f..6b6f898 100644
  
  /*
   * MessageWriter implementation for ALOG functions.
-@@ -136,7 +164,31 @@ class AlogMessageWriter : public MessageWriter {
+@@ -130,7 +158,31 @@ class AlogMessageWriter : public MessageWriter {
    }
  };
  
@@ -241,7 +241,7 @@ index 284697f..6b6f898 100644
  
  JpegR::JpegR(void* uhdrGLESCtxt, int mapDimensionScaleFactor, int mapCompressQuality,
               bool useMultiChannelGainMap, float gamma, uhdr_enc_preset_t preset,
-@@ -818,10 +870,8 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -819,10 +871,8 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
      };
  
      // generate map
@@ -254,7 +254,7 @@ index 284697f..6b6f898 100644
  
      for (unsigned int rowStart = 0; rowStart < map_height;) {
        unsigned int rowEnd = (std::min)(rowStart + rowStep, map_height);
-@@ -830,7 +880,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -831,7 +881,7 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
      }
      jobQueue.markQueueForEnd();
      generateMap();
@@ -263,7 +263,7 @@ index 284697f..6b6f898 100644
    };
  
    auto generateGainMapTwoPass = [this, sdr_intent, hdr_intent, gainmap_metadata, dest, map_width,
-@@ -843,7 +893,9 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -844,7 +894,9 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
      float* gainmap_data = reinterpret_cast<float*>(gainmap_mem.m_buffer.get());
      float gainmap_min[3] = {127.0f, 127.0f, 127.0f};
      float gainmap_max[3] = {-128.0f, -128.0f, -128.0f};
@@ -273,7 +273,7 @@ index 284697f..6b6f898 100644
  
      const int threads = (std::min)(GetCPUCoreCount(), 4u);
      const int jobSizeInRows = 1;
-@@ -853,7 +905,11 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -854,7 +906,11 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
          [this, sdr_intent, hdr_intent, gainmap_data, map_width, hdrInvOetf, hdrLuminanceFn,
           hdrOotfFn, hdrGamutConversionFn, sdrGamutConversionFn, luminanceFn, sdrYuvToRgbFn,
           hdrYuvToRgbFn, sdr_sample_pixel_fn, hdr_sample_pixel_fn, hdr_white_nits, use_luminance,
@@ -286,7 +286,7 @@ index 284697f..6b6f898 100644
        unsigned int rowStart, rowEnd;
        const bool isHdrIntentRgb = isPixelFormatRgb(hdr_intent->fmt);
        const bool isSdrIntentRgb = isPixelFormatRgb(sdr_intent->fmt);
-@@ -928,6 +984,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -929,6 +985,7 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
            }
          }
        }
@@ -294,7 +294,7 @@ index 284697f..6b6f898 100644
        {
          std::unique_lock<std::mutex> lock{gainmap_minmax};
          for (int index = 0; index < (mUseMultiChannelGainMap ? 3 : 1); index++) {
-@@ -935,13 +992,17 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -936,13 +993,17 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
            gainmap_max[index] = (std::max)(gainmap_max[index], gainmap_max_th[index]);
          }
        }
@@ -316,7 +316,7 @@ index 284697f..6b6f898 100644
  
      for (unsigned int rowStart = 0; rowStart < map_height;) {
        unsigned int rowEnd = (std::min)(rowStart + rowStep, map_height);
-@@ -950,7 +1011,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -951,7 +1012,7 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
      }
      jobQueue.markQueueForEnd();
      generateMap();
@@ -325,7 +325,7 @@ index 284697f..6b6f898 100644
  
      // xmp metadata current implementation does not support writing multichannel metadata
      // so merge them in to one
-@@ -1015,9 +1076,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -1016,9 +1077,7 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
      workers.clear();
      jobQueue.reset();
      rowStep = threads == 1 ? map_height : 1;
@@ -336,7 +336,7 @@ index 284697f..6b6f898 100644
      for (unsigned int rowStart = 0; rowStart < map_height;) {
        unsigned int rowEnd = (std::min)(rowStart + rowStep, map_height);
        jobQueue.enqueueJob(rowStart, rowEnd);
-@@ -1025,7 +1084,7 @@ uhdr_error_info_t JpegR::generateGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
+@@ -1026,7 +1085,7 @@ uhdr_error_info_t UltraHdr::generateGainMap(uhdr_raw_image_t* sdr_intent,
      }
      jobQueue.markQueueForEnd();
      encodeMap();
@@ -345,7 +345,7 @@ index 284697f..6b6f898 100644
  
      if (mUseMultiChannelGainMap) {
        for (int i = 0; i < 3; i++) {
-@@ -1686,10 +1745,8 @@ uhdr_error_info_t JpegR::applyGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_ima
+@@ -1813,10 +1872,8 @@ uhdr_error_info_t UltraHdr::applyGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
    };
  
    const int threads = (std::min)(GetCPUCoreCount(), 4u);
@@ -358,7 +358,7 @@ index 284697f..6b6f898 100644
    const unsigned int rowStep = threads == 1 ? sdr_intent->h : map_scale_factor_rnd;
    for (unsigned int rowStart = 0; rowStart < sdr_intent->h;) {
      unsigned int rowEnd = (std::min)(rowStart + rowStep, sdr_intent->h);
-@@ -1698,7 +1755,7 @@ uhdr_error_info_t JpegR::applyGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_ima
+@@ -1825,7 +1882,7 @@ uhdr_error_info_t UltraHdr::applyGainMap(uhdr_raw_image_t* sdr_intent, uhdr_raw_
    }
    jobQueue.markQueueForEnd();
    applyRecMap();
@@ -367,7 +367,7 @@ index 284697f..6b6f898 100644
  
    return g_no_error;
  }
-@@ -2076,10 +2133,8 @@ uhdr_error_info_t JpegR::toneMap(uhdr_raw_image_t* hdr_intent, uhdr_raw_image_t*
+@@ -2204,10 +2261,8 @@ uhdr_error_info_t UltraHdr::toneMap(uhdr_raw_image_t* hdr_intent, uhdr_raw_image
    };
  
    // tone map
@@ -380,7 +380,7 @@ index 284697f..6b6f898 100644
  
    for (unsigned int rowStart = 0; rowStart < height;) {
      unsigned int rowEnd = (std::min)(rowStart + rowStep, height);
-@@ -2088,7 +2143,7 @@ uhdr_error_info_t JpegR::toneMap(uhdr_raw_image_t* hdr_intent, uhdr_raw_image_t*
+@@ -2216,7 +2271,7 @@ uhdr_error_info_t UltraHdr::toneMap(uhdr_raw_image_t* hdr_intent, uhdr_raw_image
    }
    jobQueue.markQueueForEnd();
    toneMapInternal();

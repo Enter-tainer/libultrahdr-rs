@@ -272,6 +272,26 @@ fn main() {
     if cfg!(feature = "gles") {
         cfg.define("UHDR_ENABLE_GLES", "ON");
     }
+    // Control HEIF/AVIF container support via libheif. NOTE: upstream v2.0+
+    // defaults UHDR_ENABLE_HEIF to ON, so we must explicitly disable it unless
+    // the `heif` feature is requested; otherwise the default vendored build
+    // would fetch and build libheif as a dependency.
+    cfg.define(
+        "UHDR_ENABLE_HEIF",
+        if cfg!(feature = "heif") { "ON" } else { "OFF" },
+    );
+    // Control SMPTE ST 2094-50 (AGTM) dynamic metadata support. This is only
+    // built when `vendored` is enabled upstream (FetchContent clones
+    // webmproject/libsmpte2094-50 v0.1.4); with UHDR_BUILD_DEPS=OFF it is
+    // skipped with a warning and disabled.
+    cfg.define(
+        "UHDR_ENABLE_SMPTE2094_50",
+        if cfg!(feature = "smpte2094-50") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
     // Control ISO 21496-1 metadata emission via feature flag (default ON).
     cfg.define(
         "UHDR_WRITE_ISO",
@@ -341,6 +361,46 @@ fn main() {
         println!("cargo:rustc-link-lib=static={}", jpeg_name);
     } else {
         println!("cargo:rustc-link-lib=jpeg");
+    }
+
+    // When HEIF/AVIF support is enabled, the upstream CMake builds libheif as a
+    // static ExternalProject (vendored) or links a system libheif (non-vendored).
+    // `uhdr`/`core` link it PRIVATE, so the final Rust executable must pull it in.
+    if cfg!(feature = "heif") {
+        if cfg!(feature = "vendored") {
+            // Bundled libheif static archive (non-multi build) lives at
+            // <dst>/build/libheif/src/libheif-build/libheif/libheif.a
+            println!(
+                "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif",
+                dst.display()
+            );
+            if target_env == "msvc" {
+                println!(
+                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Release",
+                    dst.display()
+                );
+                println!(
+                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Debug",
+                    dst.display()
+                );
+            }
+            println!("cargo:rustc-link-lib=static=heif");
+        } else {
+            println!("cargo:rustc-link-lib=heif");
+        }
+    }
+
+    // SMPTE ST 2094-50 (AGTM) is provided by a FetchContent static library that
+    // `uhdr`/`core` link PRIVATE, so expose it to the final link too. The
+    // FetchContent build only runs when `vendored` (UHDR_BUILD_DEPS=ON) is set;
+    // without it upstream warns and disables SMPTE, so don't emit a bogus -l.
+    if cfg!(feature = "smpte2094-50") && cfg!(feature = "vendored") {
+        // FetchContent defaults to <dst>/build/_deps/libsmpte2094_50-build.
+        println!(
+            "cargo:rustc-link-search=native={}/build/_deps/libsmpte2094_50-build",
+            dst.display()
+        );
+        println!("cargo:rustc-link-lib=static=smpte2094_50_utils");
     }
 
     let link_name = if target_env == "msvc" && !build_shared {
