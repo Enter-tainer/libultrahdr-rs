@@ -146,6 +146,89 @@ fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
         src_dir,
         &manifest_dir.join("patches/libultrahdr-no-threads.patch"),
     );
+    // libheif uses POSIX mkstemp(), which wasi-libc does not implement, so it
+    // fails to build for wasm32-wasip1. libheif is not present in the staged
+    // source here (the ExternalProject clones it *during* the CMake build), so
+    // instead of patching it directly we append the fix onto the existing
+    // cmake/patches/libheif_pr1503.patch, which the ExternalProject's
+    // PATCH_COMMAND git-applies to the cloned tree.
+    const MKSTEMP_FIX: &str = r#"
+diff --git a/libheif/box.cc b/libheif/box.cc
+index 3c8bdc86..dceb4c82 100644
+--- a/libheif/box.cc
++++ b/libheif/box.cc
+@@ -1506,7 +1506,12 @@ void Box_iloc::set_use_tmp_file(bool flag)
+ {
+   m_use_tmpfile = flag;
+   if (flag) {
+-#if !defined(_WIN32)
++#if defined(__wasi__)
++    // WASI has no mkstemp()/temp-file support in libc, so keep the item data in
++    // memory instead of spilling it to a file.
++    m_use_tmpfile = false;
++    m_tmpfile_fd = -1;
++#elif !defined(_WIN32)
+     strcpy(m_tmp_filename, "/tmp/libheif-XXXXXX");
+     m_tmpfile_fd = mkstemp(m_tmp_filename);
+ #else
+diff --git a/libheif/pixelimage.cc b/libheif/pixelimage.cc
+index 04e81fe2..92be5bb9 100644
+--- a/libheif/pixelimage.cc
++++ b/libheif/pixelimage.cc
+@@ -275,23 +275,8 @@ Error HeifPixelImage::ImagePlane::alloc(uint32_t width, uint32_t height, heif_ch
+             sstr.str()};
+   }
+ 
+-  try {
+-    allocated_mem = new uint8_t[static_cast<size_t>(m_mem_height) * stride + alignment - 1];
+-    uint8_t* mem_8 = allocated_mem;
+-
+-    // shift beginning of image data to aligned memory position
+-
+-    auto mem_start_addr = (uint64_t) mem_8;
+-    auto mem_start_offset = (mem_start_addr & (alignment - 1U));
+-    if (mem_start_offset != 0) {
+-      mem_8 += alignment - mem_start_offset;
+-    }
+-
+-    mem = mem_8;
+-
+-    return Error::Ok;
+-  }
+-  catch (const std::bad_alloc& excpt) {
++  allocated_mem = new (std::nothrow) uint8_t[static_cast<size_t>(m_mem_height) * stride + alignment - 1];
++  if (allocated_mem == nullptr) {
+     std::stringstream sstr;
+     sstr << "Allocating " << static_cast<size_t>(m_mem_height) * stride + alignment - 1 << " bytes failed";
+ 
+@@ -299,6 +284,19 @@ Error HeifPixelImage::ImagePlane::alloc(uint32_t width, uint32_t height, heif_ch
+             heif_suberror_Unspecified,
+             sstr.str()};
+   }
++  uint8_t* mem_8 = allocated_mem;
++
++  // shift beginning of image data to aligned memory position
++
++  auto mem_start_addr = (uint64_t) mem_8;
++  auto mem_start_offset = (mem_start_addr & (alignment - 1U));
++  if (mem_start_offset != 0) {
++    mem_8 += alignment - mem_start_offset;
++  }
++
++  mem = mem_8;
++
++  return Error::Ok;
+ }
+ 
+ 
+"#;
+    let heif_patch = src_dir.join("cmake/patches/libheif_pr1503.patch");
+    if heif_patch.is_file()
+        && let Ok(mut f) = fs::OpenOptions::new().append(true).open(&heif_patch)
+    {
+        use std::io::Write;
+        let _ = f.write_all(MKSTEMP_FIX.as_bytes());
+    }
 }
 
 fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathBuf {
@@ -210,6 +293,7 @@ fn main() {
     }
 
     let patch_path = manifest_dir.join("patches/libultrahdr-no-threads.patch");
+    let libheif_patch_path = source_dir.join("cmake/patches/libheif_pr1503.patch");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SKIP_PATCHES");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PREFIX");
@@ -224,6 +308,7 @@ fn main() {
         source_dir.join("CMakeLists.txt").display()
     );
     println!("cargo:rerun-if-changed={}", patch_path.display());
+    println!("cargo:rerun-if-changed={}", libheif_patch_path.display());
 
     let src_dir = prepare_src_dir(&manifest_dir, &source_dir, &out_dir);
 
