@@ -153,6 +153,24 @@ fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathB
     let _ = fs::remove_dir_all(out_dir.join("build"));
     let _ = fs::remove_dir_all(&work_src);
     copy_dir_recursive(src_dir, &work_src).expect("failed to copy libultrahdr sources");
+    // Normalize the line endings of the files `patches/` touches to LF. The
+    // upstream v2.0+ tree carries a few CRLF lines; embed them byte-for-byte in
+    // the patch and Strawberry's old `patch.exe` (used on Windows CI) chokes,
+    // and `git apply` on any platform is line-ending strict. Normalizing keeps
+    // the patch portable across git configs (core.autocrlf) and patch tools.
+    for rel in [
+        "CMakeLists.txt",
+        "lib/src/jpegr.cpp",
+    ] {
+        let p = work_src.join(rel);
+        if let Ok(contents) = fs::read(&p) {
+            let text = String::from_utf8_lossy(&contents);
+            let normalized = text.replace("\r\n", "\n");
+            if normalized.as_bytes() != contents.as_slice() {
+                let _ = fs::write(&p, normalized.as_bytes());
+            }
+        }
+    }
     apply_local_patches(manifest_dir, &work_src);
     work_src
 }

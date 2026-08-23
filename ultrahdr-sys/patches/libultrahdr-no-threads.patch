@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index a6ed814..6b87bf4 100644
+index a6ed814..e0252b2 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -22,16 +22,22 @@ project(libuhdr
@@ -80,6 +80,19 @@ index a6ed814..6b87bf4 100644
  
  if(MSVC AND (UHDR_BUILD_DEPS OR UHDR_BUILD_TESTS OR UHDR_BUILD_BENCHMARK) AND BUILD_SHARED_LIBS)
    # ExternalProject_Add() for jpeg, gtest, google benchmarks is configured to build static libraries
+@@ -209,9 +230,9 @@ else()
+     # Sanitizer libraries could be only DSO's, static linking an entire executable not possible
+     message(STATUS "Pure static executable may not possible, disabling '-static' option")
+     set(UHDR_ENABLE_STATIC_LINKING OFF)
+-  elseif(MSVC AND DEFINED BUILD_FOR_WINUI AND BUILD_FOR_WINUI)
+-    # WinUI builds use /MD (DLL CRT), keep the global setting from parent project
+-    set(UHDR_ENABLE_STATIC_LINKING OFF)
++  elseif(MSVC AND DEFINED BUILD_FOR_WINUI AND BUILD_FOR_WINUI)
++    # WinUI builds use /MD (DLL CRT), keep the global setting from parent project
++    set(UHDR_ENABLE_STATIC_LINKING OFF)
+   elseif(MSVC)
+     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+     set(UHDR_ENABLE_STATIC_LINKING ON)
 @@ -264,6 +285,12 @@ if(MSVC)
    add_compile_options(/wd4305) # truncation from 'double' to 'float'
    add_compile_options(/wd4838) # conversion from 'type1' to 'type2' requires a narrowing conversion
