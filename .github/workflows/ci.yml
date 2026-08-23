@@ -129,6 +129,32 @@ jobs:
           name: ultrahdr-bake-${{ matrix.target }}
           path: artifacts/${{ matrix.target }}
 
+  build-wasm:
+    name: Build wasm (wasm32-wasip1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build wasm binary
+        uses: ./.github/actions/build-wasm
+
+      - name: Verify wasm artifact
+        shell: bash
+        run: |
+          set -eo pipefail
+          test -f target/wasm32-wasip1/release/ultrahdr-bake.wasm
+          echo "wasm artifact size: $(stat -c%s target/wasm32-wasip1/release/ultrahdr-bake.wasm) bytes"
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultrahdr-bake-wasm32-wasip1
+          path: target/wasm32-wasip1/release/ultrahdr-bake.wasm
+
   frontend:
     name: Frontend format & typecheck
     runs-on: ubuntu-latest
