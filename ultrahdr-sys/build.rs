@@ -227,6 +227,23 @@ fn main() {
 
     let src_dir = prepare_src_dir(&manifest_dir, &source_dir, &out_dir);
 
+    // CMake's FetchContent (libheif, libsmpte2094-50) runs a *nested* `cargo
+    // build` on upstream's bundled Rust crates. When the outer build is
+    // `cargo clippy`, those nested builds inherit clippy's driver and fail on
+    // upstream lints enabled by `-D warnings`. Rebuild them with plain rustc by
+    // stripping clippy-only env vars for the C/CMake process.
+    for var in [
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CLIPPY_ARGS",
+    ] {
+        // SAFETY: removing vars from the process env is safe here; a build
+        // script does not spawn threads that would race on the env (and the
+        // cmake crate already spawns the child process separately).
+        unsafe { env::remove_var(var) };
+    }
+
     let target = env::var("TARGET").expect("TARGET");
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
