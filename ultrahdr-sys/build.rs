@@ -252,6 +252,20 @@ fn main() {
 
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release");
+    // Shrink the wasm by size-optimizing + LTO the C++ side (libjpeg-turbo and
+    // libultrahdr). The wasm link already uses `--gc-sections` to drop unreached
+    // C++, but -Oz keeps the reachable code compact and -flto lets rust-lld run
+    // cross-function optimisations over the archived bitcode at the final link.
+    // We must also override the Release-profile flags: the default `-O3` would
+    // otherwise come last and silently win over `-Oz` (last `-O` flag wins).
+    if is_wasm {
+        cfg.cflag("-Oz");
+        cfg.cxxflag("-Oz");
+        cfg.cflag("-flto");
+        cfg.cxxflag("-flto");
+        cfg.define("CMAKE_C_FLAGS_RELEASE", "-Oz -flto -DNDEBUG");
+        cfg.define("CMAKE_CXX_FLAGS_RELEASE", "-Oz -flto -DNDEBUG");
+    }
     if let Some((toolchain, prefix)) = &wasi {
         if !toolchain.is_file() {
             panic!(
