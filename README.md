@@ -36,7 +36,7 @@ target/release/ultrahdr-bake \
   --hdr hdr_gainmap.jpg \
   --sdr base_sdr.jpg \
   --out ultrahdr_out.jpg \
-  --base-q 95 --gm-q 95
+  --base-q 95 --gm-q 100
 
 # Or let the tool auto-detect which JPEG is HDR vs SDR
 target/release/ultrahdr-bake photo1.jpg photo2.jpg
@@ -53,6 +53,10 @@ pnpm --dir ultrahdr-browser install --frozen-lockfile
 pnpm --dir ultrahdr-browser build
 ```
 使用默认特性构建 CLI 并编码 UltraHDR 的示例如上。
+
+Baking defaults to RGB multi-channel gain maps, gain map JPEG quality 100, and scale 1 to preserve HDR colors. Use `--multichannel=false` for a single-channel gain map or `--gm-q` to reduce quality and file size.
+
+合并默认使用 RGB 三通道增益图、增益图 JPEG 质量 100、缩放因子 1，以保留 HDR 颜色。可通过 `--multichannel=false` 切换为单通道，或用 `--gm-q` 降低质量以减小文件体积。
 
 Browser demo: deploys under root by default; GitHub Pages build sets `VITE_BASE_PATH=/libultrahdr-rs/`. The wasm (`ultrahdr-bake.wasm`) is fetched relative to `import.meta.env.BASE_URL`. /
 浏览器演示：默认以根路径部署；在 GitHub Pages 上构建时使用 `VITE_BASE_PATH=/libultrahdr-rs/`，WASM（`ultrahdr-bake.wasm`）从 `import.meta.env.BASE_URL` 相对路径加载。

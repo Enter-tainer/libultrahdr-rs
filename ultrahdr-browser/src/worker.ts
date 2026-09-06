@@ -53,7 +53,7 @@ async function runBake(req: Extract<WorkerRequest, { type: "bake" }>) {
     "--scale",
     req.opts.scale.toString(),
   ];
-  if (req.opts.multichannel) args.push("--multichannel");
+  args.push(`--multichannel=${req.opts.multichannel}`);
   if (req.opts.targetPeak !== undefined) {
     args.push("--target-peak", req.opts.targetPeak.toString());
   }

@@ -113,9 +113,9 @@ export default function App() {
 
   const [bakeInputs, setBakeInputs] = React.useState({
     baseQ: 95,
-    gainmapQ: 95,
+    gainmapQ: 100,
     scale: 1,
-    multichannel: false,
+    multichannel: true,
     targetPeak: "",
   });
   const [bakeFiles, setBakeFiles] = React.useState<File[]>([]);
@@ -414,7 +414,7 @@ export default function App() {
                       onChange={(e) =>
                         setBakeInputs((s) => ({
                           ...s,
-                          gainmapQ: Number(e.target.value || 95),
+                          gainmapQ: Number(e.target.value || 100),
                         }))
                       }
                     />

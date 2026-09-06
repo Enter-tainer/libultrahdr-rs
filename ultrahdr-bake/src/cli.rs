@@ -70,7 +70,7 @@ pub struct BakeArgs {
     #[arg(
         long = "gm-q",
         alias = "gainmap-q",
-        default_value_t = 95,
+        default_value_t = 100,
         value_parser = clap::value_parser!(i32).range(1..=100)
     )]
     pub gainmap_quality: i32,
@@ -83,8 +83,17 @@ pub struct BakeArgs {
     )]
     pub gainmap_scale: i32,
 
-    /// Use multi-channel gain maps (--mc works too)
-    #[arg(long = "multichannel", short = 'm', alias = "mc")]
+    /// Use RGB gain maps; pass --multichannel=false for a single-channel gain map
+    #[arg(
+        long = "multichannel",
+        short = 'm',
+        alias = "mc",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        require_equals = true
+    )]
     pub multichannel_gainmap: bool,
 
     /// Override target peak brightness in nits (falls back to metadata or 1600 nits)
