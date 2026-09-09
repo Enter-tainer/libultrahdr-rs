@@ -22,7 +22,7 @@ mod encoder;
 mod error;
 mod types;
 
-pub use decoder::Decoder;
+pub use decoder::{Decoder, parse_ultra_hdr};
 pub use encoder::Encoder;
 pub use error::{Error, Result};
 pub use types::*;

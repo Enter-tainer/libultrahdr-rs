@@ -323,6 +323,53 @@ impl GainMapMetadata {
     }
 }
 
+/// The container/codec a parsed UltraHDR image uses.
+///
+/// Detected from the input bytes: JPEG starts with a SOI marker (`FF D8`), while
+/// HEIF/AVIF use an ISO BMFF `ftyp` box at offset 4. Lets the caller pick the
+/// right WebCodecs codec for the returned base/gain-map bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UltraHdrContainer {
+    /// JPEG UltraHDR (the common Android/Chrome case).
+    Jpeg,
+    /// HEIF / HEIC container.
+    Heif,
+    /// AVIF container.
+    Avif,
+    /// Fallback when the container could not be identified.
+    Unknown,
+}
+
+/// Everything needed to render an UltraHDR image in a browser, without decoding
+/// or rendering pixels in Rust.
+///
+/// [`Decoder::parse_layout`] returns this so JS can decode the base and gain-map
+/// JPEGs (e.g. with WebCodecs) and render them (e.g. with WebGPU) using the
+/// gain-map parameters. The base and gain-map bytes are owned copies, because
+/// libultrahdr's accessors hand back separate buffers (not views into the input),
+/// and owned data crosses the wasm/JS boundary cleanly.
+#[derive(Debug, Clone)]
+pub struct ParsedUltraHdr {
+    /// Container/codec the input file uses (detected from the bytes).
+    pub container: UltraHdrContainer,
+    /// Embedded gain-map image, as JPEG bytes.
+    pub gainmap_image: Vec<u8>,
+    /// Gain-map parameters for the renderer/shader, when the container carries them.
+    pub gainmap_metadata: Option<GainMapMetadata>,
+    /// Base image width in pixels.
+    pub width: u32,
+    /// Base image height in pixels.
+    pub height: u32,
+    /// Gain-map width in pixels.
+    pub gainmap_width: u32,
+    /// Gain-map height in pixels.
+    pub gainmap_height: u32,
+    /// Raw EXIF block, when present.
+    pub exif: Option<Vec<u8>>,
+    /// Raw ICC profile block, when present.
+    pub icc: Option<Vec<u8>>,
+}
+
 /// Borrowed descriptor over a caller-provided packed pixel buffer.
 pub struct RawImage<'a> {
     pub(crate) inner: sys::uhdr_raw_image,
