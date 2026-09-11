@@ -20,11 +20,12 @@ default = ["vendored", "iso21496", "jpeg-max-dimension"]
 vendored = ["ultrahdr/vendored"]
 shared = ["ultrahdr/shared"]
 gles = ["ultrahdr/gles"]
-heif = ["ultrahdr/heif"]
+heif = ["ultrahdr/heif", "dep:zune-jpeg"]
 smpte2094-50 = ["ultrahdr/smpte2094-50"]
 iso21496 = ["ultrahdr/iso21496"]
 no-threads = ["ultrahdr/no-threads"]
 jpeg-max-dimension = ["ultrahdr/jpeg-max-dimension"]
+wasm-avif = ["ultrahdr/wasm-avif"]
 
 [dependencies]
 ultrahdr = { workspace = true }
@@ -34,3 +35,8 @@ memchr.workspace = true
 bytes.workspace = true
 img-parts.workspace = true
 quick-xml.workspace = true
+
+# HEIF/AVIF output needs raw intents (upstream rejects a compressed base for those
+# containers), and libultrahdr's decoder refuses plain JPEGs, so the SDR base is
+# decoded here. Only pulled in by the `heif` feature.
+zune-jpeg = { version = "0.5.16-rc2", optional = true }

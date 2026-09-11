@@ -42,6 +42,10 @@ xmp = []
 no-threads = []
 # Raise UHDR_MAX_DIMENSION to libjpeg-turbo's JPEG_MAX_DIMENSION.
 jpeg-max-dimension = []
+# Cross-compile libaom for wasm32-wasip1 so `heif` has a working AV1 codec on wasm
+# (host codecs cannot be linked into a wasm module). No effect on other targets and
+# no effect without `heif`. Adds several MB to the wasm binary.
+wasm-avif = []
 
 [dependencies]
 

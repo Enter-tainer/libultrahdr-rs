@@ -45,13 +45,13 @@ fn run(cmd: cli::Command) -> Result<()> {
 fn resolve_out_path(args: &cli::BakeArgs, inputs: &detect::InputPair) -> PathBuf {
     args.out
         .clone()
-        .unwrap_or_else(|| default_out_for_sdr(&inputs.sdr))
+        .unwrap_or_else(|| default_out_for_sdr(&inputs.sdr, args.format))
 }
 
-fn default_out_for_sdr(sdr_path: &Path) -> PathBuf {
+fn default_out_for_sdr(sdr_path: &Path, format: cli::OutputFormat) -> PathBuf {
     let parent = sdr_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = sdr_path.file_stem().unwrap_or_else(|| OsStr::new("sdr"));
-    let ext = sdr_path.extension().unwrap_or_else(|| OsStr::new("jpg"));
+    let ext = OsStr::new(format.extension());
 
     let mut filename = stem.to_os_string();
     filename.push("-merge");
@@ -84,4 +84,57 @@ fn default_motion_out(photo_path: &Path) -> PathBuf {
     let mut out = parent.to_path_buf();
     out.push(filename);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bake_args(argv: &[&str]) -> cli::BakeArgs {
+        match cli::Cli::parse_from(argv).into_command() {
+            cli::Command::Bake(args) => args,
+            other => panic!("expected bake args, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn format_defaults_to_jpeg() {
+        let args = bake_args(&["ultrahdr-bake", "a.jpg", "b.jpg"]);
+
+        assert_eq!(args.format, cli::OutputFormat::Jpeg);
+        assert_eq!(args.format.codec(), ultrahdr::Codec::Jpeg);
+        assert_eq!(
+            default_out_for_sdr(Path::new("dir/base.jpg"), args.format),
+            Path::new("dir/base-merge.jpg")
+        );
+    }
+
+    #[test]
+    fn format_drives_the_default_output_extension() {
+        let avif = bake_args(&["ultrahdr-bake", "--format", "avif", "a.jpg", "b.jpg"]);
+        assert_eq!(avif.format.codec(), ultrahdr::Codec::Avif);
+        assert_eq!(
+            default_out_for_sdr(Path::new("dir/base.jpg"), avif.format),
+            Path::new("dir/base-merge.avif")
+        );
+
+        let heif = bake_args(&["ultrahdr-bake", "--format", "heif", "a.jpg", "b.jpg"]);
+        assert_eq!(heif.format.codec(), ultrahdr::Codec::Heif);
+        assert_eq!(heif.format.extension(), "heic");
+    }
+
+    #[test]
+    fn explicit_out_wins_over_the_format_extension() {
+        let args = bake_args(&[
+            "ultrahdr-bake",
+            "--format",
+            "avif",
+            "--out",
+            "custom.bin",
+            "a.jpg",
+            "b.jpg",
+        ]);
+
+        assert_eq!(args.out.as_deref(), Some(Path::new("custom.bin")));
+    }
 }

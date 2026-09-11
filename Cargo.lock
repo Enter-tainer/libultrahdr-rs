@@ -429,6 +429,7 @@ dependencies = [
  "memchr",
  "quick-xml",
  "ultrahdr",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -464,4 +465,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.5.16-rc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b554da611136df9905629a243ee2e9a92453e0c4476d91185133d9b9c058af15"
+dependencies = [
+ "zune-core",
 ]

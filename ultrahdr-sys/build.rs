@@ -98,6 +98,138 @@ fn library_present(name: &str) -> bool {
     })
 }
 
+/// Run a command from the build script, failing loudly with the full command line.
+fn run_command(cmd: &mut Command) {
+    let status = cmd
+        .status()
+        .unwrap_or_else(|error| panic!("failed to spawn {cmd:?}: {error}"));
+    assert!(status.success(), "command failed: {cmd:?}");
+}
+
+/// libaom release cross-compiled for wasm, pinned so the codec build is reproducible.
+const WASM_AOM_VERSION: &str = "v3.15.0";
+
+/// Whether this compilation cross-compiles and links the wasm AV1 codec.
+fn wasm_avif_enabled(target: &str) -> bool {
+    is_wasm_target(target) && cfg!(feature = "heif") && cfg!(feature = "wasm-avif")
+}
+
+/// Cross-compile libaom for wasm32-wasip1 and return a prefix that libheif's `find_package(AOM)`
+/// can consume.
+///
+/// libheif needs a codec library to do more than parse containers, and a host codec cannot be
+/// linked into a wasm module. libaom is the portable choice: it has a `generic` target (no x86
+/// SIMD), builds single-threaded, and its setjmp-based error handling maps onto the
+/// `env.setjmp`/`env.longjmp` imports that wasi-libc's `libsetjmp.a` already produces (the browser
+/// demo stubs those). HEVC is deliberately out of scope: x265/libde265 have no comparable WASI
+/// port, so wasm gets AVIF only.
+///
+/// The result is cached in `OUT_DIR`, so later builds reuse the archive instead of rebuilding it.
+/// Set `ULTRAHDR_AOM_SRC` to an existing libaom checkout to skip the clone entirely.
+fn build_wasm_libaom(out_dir: &Path, wasi_prefix: &Path) -> PathBuf {
+    let prefix = out_dir.join("aom-wasm-prefix");
+    let archive = prefix.join("lib/libaom.a");
+    let pkg_config = prefix.join("lib/pkgconfig/aom.pc");
+    if archive.is_file() && pkg_config.is_file() {
+        return prefix;
+    }
+
+    let src = match env::var_os("ULTRAHDR_AOM_SRC") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let dir = out_dir.join("aom-src");
+            if !dir.join("CMakeLists.txt").is_file() {
+                let _ = fs::remove_dir_all(&dir);
+                run_command(
+                    Command::new("git")
+                        .args([
+                            "clone",
+                            "--depth",
+                            "1",
+                            "--branch",
+                            WASM_AOM_VERSION,
+                            "https://aomedia.googlesource.com/aom",
+                        ])
+                        .arg(&dir),
+                );
+            }
+            dir
+        }
+    };
+    assert!(
+        src.join("CMakeLists.txt").is_file(),
+        "libaom sources not found at {}; set ULTRAHDR_AOM_SRC",
+        src.display()
+    );
+
+    let build = out_dir.join("aom-build");
+    let jobs = std::thread::available_parallelism()
+        .map_or(4, |jobs| jobs.get())
+        .to_string();
+    let toolchain = wasi_prefix.join("share/cmake/wasi-sdk-p1.cmake");
+    run_command(
+        Command::new("cmake")
+            .arg("-S")
+            .arg(&src)
+            .arg("-B")
+            .arg(&build)
+            .arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", toolchain.display()))
+            .arg(format!("-DWASI_SDK_PREFIX={}", wasi_prefix.display()))
+            .arg("-DCMAKE_BUILD_TYPE=Release")
+            // Portable C only: libaom's x86/AArch64 SIMD paths have no wasm equivalent.
+            .arg("-DAOM_TARGET_CPU=generic")
+            .arg("-DCONFIG_MULTITHREAD=0")
+            .arg("-DCONFIG_RUNTIME_CPU_DETECT=0")
+            .arg("-DCONFIG_AV1_ENCODER=1")
+            .arg("-DCONFIG_AV1_DECODER=1")
+            .arg("-DENABLE_TESTS=0")
+            .arg("-DENABLE_TOOLS=0")
+            .arg("-DENABLE_EXAMPLES=0")
+            .arg("-DENABLE_DOCS=0")
+            .arg("-DBUILD_SHARED_LIBS=0")
+            // wasi-sdk's <setjmp.h> refuses to compile unless the SJLJ emulation is enabled, and
+            // libaom uses setjmp/longjmp for its error recovery.
+            .arg("-DCMAKE_C_FLAGS=-mllvm -wasm-enable-sjlj")
+            .arg("-DCMAKE_CXX_FLAGS=-mllvm -wasm-enable-sjlj"),
+    );
+    run_command(
+        Command::new("cmake")
+            .arg("--build")
+            .arg(&build)
+            .arg("-j")
+            .arg(jobs)
+            .args(["--target", "aom"]),
+    );
+
+    // Lay out a prefix that looks like an installed libaom. libheif's FindAOM.cmake combines
+    // pkg-config with find_path/find_library, so a matching aom.pc is what makes
+    // CMAKE_PREFIX_PATH/PKG_CONFIG_LIBDIR prefer this copy over any host one.
+    fs::create_dir_all(&prefix).expect("failed to create the libaom prefix");
+    copy_dir_recursive(&src.join("aom"), &prefix.join("include/aom"))
+        .expect("failed to copy the libaom headers");
+    fs::create_dir_all(prefix.join("lib/pkgconfig")).expect("failed to create the libaom .pc dir");
+    fs::copy(build.join("libaom.a"), &archive).expect("failed to copy libaom.a");
+    fs::write(
+        &pkg_config,
+        format!(
+            "prefix={prefix}\n\
+             exec_prefix=${{prefix}}\n\
+             libdir=${{exec_prefix}}/lib\n\
+             includedir=${{prefix}}/include\n\
+             \n\
+             Name: aom\n\
+             Description: AV1 codec library (wasm32-wasip1)\n\
+             Version: {WASM_AOM_VERSION}\n\
+             Libs: -L${{libdir}} -laom\n\
+             Libs.private: -lm\n\
+             Cflags: -I${{includedir}}\n",
+            prefix = prefix.display()
+        ),
+    )
+    .expect("failed to write aom.pc");
+    prefix
+}
+
 fn wasi_toolchain() -> Option<(PathBuf, PathBuf)> {
     let target = env::var("TARGET").ok()?;
     if !target.contains("wasm32-wasi") {
@@ -198,6 +330,84 @@ fn apply_patch_once(src_dir: &Path, patch_path: &Path) {
     }
 }
 
+/// Codec libraries libheif would otherwise look for on the build host.
+const LIBHEIF_HOST_CODECS: [&str; 18] = [
+    "LIBDE265",
+    "X265",
+    "KVAZAAR",
+    "UVG266",
+    "VVDEC",
+    "VVENC",
+    "OpenH264_DECODER",
+    "DAV1D",
+    "AOM_DECODER",
+    "AOM_ENCODER",
+    "SvtEnc",
+    "RAV1E",
+    "JPEG_DECODER",
+    "JPEG_ENCODER",
+    "OpenJPEG_ENCODER",
+    "OpenJPEG_DECODER",
+    "FFMPEG_DECODER",
+    "OPENJPH_ENCODER",
+];
+
+/// Patch hunk that stops libheif from probing the **build host** for codec libraries when the
+/// target is WASI.
+///
+/// Beyond being the wrong architecture, the host include directories (`/usr/include` on a typical
+/// Linux host) leak into the cross compile and break it (`gnu/stubs-32.h` not found). `keep_aom`
+/// is set by the `wasm-avif` feature, which cross-compiles libaom into a prefix libheif can find,
+/// so the AOM entries stay enabled in that case. Native builds never read this hunk.
+fn libheif_wasi_codec_guard(keep_aom: bool) -> String {
+    let mut added = vec![
+        "# UltraHDR: when cross-compiling for WASI, never probe the build host for codec"
+            .to_owned(),
+        "# libraries: their include directories (e.g. /usr/include) and archives break the"
+            .to_owned(),
+        "# cross build, and a host library cannot be linked into a wasm module anyway.".to_owned(),
+        String::new(),
+        "if(CMAKE_SYSTEM_NAME STREQUAL \"WASI\")".to_owned(),
+    ];
+    for codec in LIBHEIF_HOST_CODECS {
+        if keep_aom && codec.starts_with("AOM") {
+            continue;
+        }
+        added.push(format!("  set(WITH_{codec} OFF CACHE BOOL \"\" FORCE)"));
+    }
+    added.push("endif()".to_owned());
+    added.push(String::new());
+
+    let context = [
+        "     unset(msg)",
+        " endmacro()",
+        " ",
+        " # libde265",
+        " ",
+        " plugin_option(LIBDE265 \"libde265 HEVC decoder\" ON OFF)",
+    ];
+    let mut hunk = String::from(
+        "diff --git a/CMakeLists.txt b/CMakeLists.txt\n\
+         --- a/CMakeLists.txt\n\
+         +++ b/CMakeLists.txt\n",
+    );
+    hunk.push_str(&format!(
+        "@@ -114,{} +114,{} @@\n",
+        context.len(),
+        context.len() + added.len()
+    ));
+    hunk.push_str(&context[..3].join("\n"));
+    hunk.push('\n');
+    for line in &added {
+        hunk.push('+');
+        hunk.push_str(line);
+        hunk.push('\n');
+    }
+    hunk.push_str(&context[3..].join("\n"));
+    hunk.push('\n');
+    hunk
+}
+
 fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
     if env::var("ULTRAHDR_SKIP_PATCHES").is_ok() {
         return;
@@ -282,44 +492,15 @@ index 04e81fe2..92be5bb9 100644
  
  
 "#;
-    // When cross-compiling for WASI, libheif's CMake probes the *build host* for codec libraries
-    // (x265, aom, dav1d, ...). Beyond being the wrong architecture, their include directories -
-    // `/usr/include` on a typical Linux host - leak into the WASI compile and break it
-    // (`gnu/stubs-32.h` not found). Disable host codec discovery for WASI builds so libheif builds
-    // its container support only; native builds are unaffected.
-    const LIBHEIF_WASI_CODECS_FIX: &str = r#"
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -114,6 +114,20 @@
-     unset(msg)
- endmacro()
- 
-+# UltraHDR: when cross-compiling for WASI, never probe the build host for codec libraries. Their
-+# include directories (e.g. /usr/include) and host archives break the cross build, and host
-+# libraries could not be linked into a wasm module anyway.
-+
-+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
-+  foreach(_uhdr_disabled_codec
-+      LIBDE265 X265 KVAZAAR UVG266 VVDEC VVENC OpenH264_DECODER DAV1D AOM_DECODER AOM_ENCODER
-+      SvtEnc RAV1E JPEG_DECODER JPEG_ENCODER OpenJPEG_ENCODER OpenJPEG_DECODER FFMPEG_DECODER
-+      OPENJPH_ENCODER)
-+    set(WITH_${_uhdr_disabled_codec} OFF CACHE BOOL "" FORCE)
-+  endforeach()
-+  unset(_uhdr_disabled_codec)
-+endif()
-+
- # libde265
- 
- plugin_option(LIBDE265 "libde265 HEVC decoder" ON OFF)
-"#;
     let heif_patch = src_dir.join("cmake/patches/libheif_pr1503.patch");
     if heif_patch.is_file()
         && let Ok(mut f) = fs::OpenOptions::new().append(true).open(&heif_patch)
     {
         use std::io::Write;
         let _ = f.write_all(MKSTEMP_FIX.as_bytes());
-        let _ = f.write_all(LIBHEIF_WASI_CODECS_FIX.as_bytes());
+        let guard =
+            libheif_wasi_codec_guard(wasm_avif_enabled(&env::var("TARGET").unwrap_or_default()));
+        let _ = f.write_all(guard.as_bytes());
     }
 }
 
@@ -428,6 +609,32 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let is_wasm = is_wasm_target(&target);
     let wasi = wasi_toolchain();
+
+    // `wasm-avif` cross-compiles libaom for the target and points the nested libheif configure at
+    // it, because the WASI guard added above disables every host codec.
+    println!("cargo:rerun-if-env-changed=ULTRAHDR_AOM_SRC");
+    let wasm_aom = if cfg!(feature = "wasm-avif") && !cfg!(feature = "heif") {
+        println!("cargo:warning=the `wasm-avif` feature only has an effect together with `heif`");
+        None
+    } else if wasm_avif_enabled(&target) {
+        let (_, wasi_prefix) = wasi
+            .as_ref()
+            .expect("wasm-avif needs a wasi-sdk toolchain; set WASI_SDK_PREFIX");
+        let prefix = build_wasm_libaom(&out_dir, wasi_prefix);
+        let pc_dir = prefix.join("lib/pkgconfig");
+        // SAFETY: removing/adding process env vars is safe here; the build script does not spawn
+        // threads that race on them, and these only affect the CMake children spawned below.
+        unsafe {
+            // Make libheif find this libaom (CMAKE_PREFIX_PATH + its aom.pc) while hiding every
+            // host .pc file, whose include directories would leak into the cross build.
+            env::set_var("CMAKE_PREFIX_PATH", &prefix);
+            env::set_var("PKG_CONFIG_LIBDIR", &pc_dir);
+            env::set_var("PKG_CONFIG_PATH", &pc_dir);
+        }
+        Some(prefix)
+    } else {
+        None
+    };
 
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release");
@@ -632,11 +839,23 @@ fn main() {
         } else {
             println!("cargo:rustc-link-lib=heif");
         }
-        for flag in &heif_codec_flags {
-            if let Some(dir) = flag.strip_prefix("-L") {
-                println!("cargo:rustc-link-search=native={dir}");
-            } else if let Some(lib) = flag.strip_prefix("-l") {
-                println!("cargo:rustc-link-lib={lib}");
+        if is_wasm {
+            // Without `wasm-avif` the artifact keeps libheif container support only, i.e. no
+            // HEIF/AVIF codecs at runtime.
+            if let Some(prefix) = &wasm_aom {
+                println!(
+                    "cargo:rustc-link-search=native={}",
+                    prefix.join("lib").display()
+                );
+                println!("cargo:rustc-link-lib=static=aom");
+            }
+        } else {
+            for flag in &heif_codec_flags {
+                if let Some(dir) = flag.strip_prefix("-L") {
+                    println!("cargo:rustc-link-search=native={dir}");
+                } else if let Some(lib) = flag.strip_prefix("-l") {
+                    println!("cargo:rustc-link-lib={lib}");
+                }
             }
         }
     }

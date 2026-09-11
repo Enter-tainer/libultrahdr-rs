@@ -1,6 +1,39 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, builder::ValueHint};
+use clap::{Args, Parser, Subcommand, ValueEnum, builder::ValueHint};
+use ultrahdr::Codec;
+
+/// Container written by `ultrahdr-bake bake`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// JPEG UltraHDR; always available.
+    Jpeg,
+    /// AVIF (AV1); needs the `heif` feature plus libaom, either from the host or
+    /// cross-compiled with the `wasm-avif` feature.
+    Avif,
+    /// HEIF/HEIC (HEVC); needs the `heif` feature and a host HEVC encoder (x265).
+    Heif,
+}
+
+impl OutputFormat {
+    /// The libultrahdr output codec behind this format.
+    pub fn codec(self) -> Codec {
+        match self {
+            Self::Jpeg => Codec::Jpeg,
+            Self::Avif => Codec::Avif,
+            Self::Heif => Codec::Heif,
+        }
+    }
+
+    /// File extension used when `--out` is omitted.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpg",
+            Self::Avif => "avif",
+            Self::Heif => "heic",
+        }
+    }
+}
 
 /// Command-line arguments for ultrahdr-bake.
 #[derive(Parser, Debug, Clone)]
@@ -57,6 +90,10 @@ pub struct BakeArgs {
         help = "Defaults to <SDR-filename>-merge.<ext> when omitted"
     )]
     pub out: Option<PathBuf>,
+
+    /// Output container format
+    #[arg(long, value_enum, default_value = "jpeg")]
+    pub format: OutputFormat,
 
     /// JPEG quality for the SDR base image (1-100)
     #[arg(
