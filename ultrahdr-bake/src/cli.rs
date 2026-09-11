@@ -62,18 +62,18 @@ pub struct BakeArgs {
     #[arg(
         long = "base-q",
         default_value_t = 95,
-        value_parser = clap::value_parser!(i32).range(1..=100)
+        value_parser = clap::value_parser!(u8).range(1..=100)
     )]
-    pub base_quality: i32,
+    pub base_quality: u8,
 
     /// JPEG quality for the gain map (1-100)
     #[arg(
         long = "gm-q",
         alias = "gainmap-q",
         default_value_t = 100,
-        value_parser = clap::value_parser!(i32).range(1..=100)
+        value_parser = clap::value_parser!(u8).range(1..=100)
     )]
-    pub gainmap_quality: i32,
+    pub gainmap_quality: u8,
 
     /// Gain map scale factor
     #[arg(
