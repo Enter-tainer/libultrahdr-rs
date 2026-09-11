@@ -114,6 +114,12 @@ async function runCli(args: string[], outName: string) {
       longjmp: () => {
         throw new Error("longjmp called");
       },
+      // Only imported by builds with the `heif` feature (libheif's plugin registry). Report
+      // "nothing loaded" instead of failing to instantiate; the default build ignores these.
+      dlopen: () => 0,
+      dlsym: () => 0,
+      dlclose: () => 0,
+      dlerror: () => 0,
     },
   });
   wasi.start(

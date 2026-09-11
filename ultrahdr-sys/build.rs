@@ -38,6 +38,66 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Link flags for the codec libraries the vendored libheif was built against.
+///
+/// libheif links its codecs (libaom, x265, dav1d, ...) PRIVATE, so `aom_*`/`x265_*` symbols stay
+/// undefined in the `libheif.a` archive. Anything that pulls that archive in — the Rust
+/// executable and a shared `libuhdr` alike — therefore has to add the codecs itself, otherwise the
+/// static link fails and the shared object fails to load at runtime. Only libraries that are
+/// actually present are emitted, so this is a no-op on systems whose libheif has no such codecs.
+fn libheif_codec_link_flags() -> Vec<String> {
+    // (pkg-config package name, library name)
+    const CODECS: [(&str, &str); 7] = [
+        ("x265", "x265"),
+        ("aom", "aom"),
+        ("dav1d", "dav1d"),
+        ("libde265", "de265"),
+        ("rav1e", "rav1e"),
+        ("SvtAv1Enc", "SvtAv1Enc"),
+        ("vvenc", "vvenc"),
+    ];
+
+    let mut flags: Vec<String> = Vec::new();
+    for (package, lib_name) in CODECS {
+        let candidate = match Command::new("pkg-config")
+            .args(["--libs", package])
+            .output()
+        {
+            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+            // No pkg-config (or the package is unknown): fall back to a plain existence probe.
+            _ if library_present(lib_name) => vec![format!("-l{lib_name}")],
+            _ => continue,
+        };
+        for flag in candidate {
+            if !flags.contains(&flag) {
+                flags.push(flag);
+            }
+        }
+    }
+    flags
+}
+
+/// Whether `lib<name>.so`/`.a`/`.dylib` exists in one of the usual library directories.
+fn library_present(name: &str) -> bool {
+    const DIRS: [&str; 6] = [
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/local/lib",
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/opt/homebrew/lib",
+    ];
+    DIRS.iter().any(|dir| {
+        let dir = Path::new(dir);
+        ["so", "a", "dylib"]
+            .iter()
+            .any(|extension| dir.join(format!("lib{name}.{extension}")).exists())
+    })
+}
+
 fn wasi_toolchain() -> Option<(PathBuf, PathBuf)> {
     let target = env::var("TARGET").ok()?;
     if !target.contains("wasm32-wasi") {
@@ -222,12 +282,44 @@ index 04e81fe2..92be5bb9 100644
  
  
 "#;
+    // When cross-compiling for WASI, libheif's CMake probes the *build host* for codec libraries
+    // (x265, aom, dav1d, ...). Beyond being the wrong architecture, their include directories -
+    // `/usr/include` on a typical Linux host - leak into the WASI compile and break it
+    // (`gnu/stubs-32.h` not found). Disable host codec discovery for WASI builds so libheif builds
+    // its container support only; native builds are unaffected.
+    const LIBHEIF_WASI_CODECS_FIX: &str = r#"
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -114,6 +114,20 @@
+     unset(msg)
+ endmacro()
+ 
++# UltraHDR: when cross-compiling for WASI, never probe the build host for codec libraries. Their
++# include directories (e.g. /usr/include) and host archives break the cross build, and host
++# libraries could not be linked into a wasm module anyway.
++
++if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
++  foreach(_uhdr_disabled_codec
++      LIBDE265 X265 KVAZAAR UVG266 VVDEC VVENC OpenH264_DECODER DAV1D AOM_DECODER AOM_ENCODER
++      SvtEnc RAV1E JPEG_DECODER JPEG_ENCODER OpenJPEG_ENCODER OpenJPEG_DECODER FFMPEG_DECODER
++      OPENJPH_ENCODER)
++    set(WITH_${_uhdr_disabled_codec} OFF CACHE BOOL "" FORCE)
++  endforeach()
++  unset(_uhdr_disabled_codec)
++endif()
++
+ # libde265
+ 
+ plugin_option(LIBDE265 "libde265 HEVC decoder" ON OFF)
+"#;
     let heif_patch = src_dir.join("cmake/patches/libheif_pr1503.patch");
     if heif_patch.is_file()
         && let Ok(mut f) = fs::OpenOptions::new().append(true).open(&heif_patch)
     {
         use std::io::Write;
         let _ = f.write_all(MKSTEMP_FIX.as_bytes());
+        let _ = f.write_all(LIBHEIF_WASI_CODECS_FIX.as_bytes());
     }
 }
 
@@ -275,6 +367,8 @@ fn main() {
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .layout_tests(false)
             .allowlist_function("uhdr_.*")
+            // `is_uhdr_image` does not carry the `uhdr_` prefix, allowlist it explicitly.
+            .allowlist_function("is_uhdr_image")
             .allowlist_type("uhdr_.*")
             .allowlist_var("UHDR_.*")
             .generate()
@@ -348,8 +442,16 @@ fn main() {
         cfg.cxxflag("-Oz");
         cfg.cflag("-flto");
         cfg.cxxflag("-flto");
+        // wasi-sdk >= 22 defaults C++ to wasm exception handling, which emits the `exnref` and
+        // `try_table` instructions that browsers cannot run yet (and which the WASI shim used by
+        // the web demo does not model). libultrahdr never throws, so build the C++ side without
+        // exceptions and link the matching `noeh` libc++ instead; see the link section below.
+        cfg.cxxflag("-fno-exceptions");
         cfg.define("CMAKE_C_FLAGS_RELEASE", "-Oz -flto -DNDEBUG");
-        cfg.define("CMAKE_CXX_FLAGS_RELEASE", "-Oz -flto -DNDEBUG");
+        cfg.define(
+            "CMAKE_CXX_FLAGS_RELEASE",
+            "-Oz -flto -fno-exceptions -DNDEBUG",
+        );
     }
     if let Some((toolchain, prefix)) = &wasi {
         if !toolchain.is_file() {
@@ -407,10 +509,21 @@ fn main() {
     // defaults UHDR_ENABLE_HEIF to ON, so we must explicitly disable it unless
     // the `heif` feature is requested; otherwise the default vendored build
     // would fetch and build libheif as a dependency.
-    cfg.define(
-        "UHDR_ENABLE_HEIF",
-        if cfg!(feature = "heif") { "ON" } else { "OFF" },
-    );
+    let heif = cfg!(feature = "heif");
+    cfg.define("UHDR_ENABLE_HEIF", if heif { "ON" } else { "OFF" });
+
+    // The vendored libheif is linked PRIVATE into libuhdr, so its codec libraries have to be
+    // added to every final link: the Rust executable and, with `shared`, libuhdr itself (which
+    // would otherwise be left with undefined `aom_*`/`x265_*` symbols and fail to load).
+    let heif_codec_flags = if heif && cfg!(feature = "vendored") && !is_wasm && target_env != "msvc"
+    {
+        libheif_codec_link_flags()
+    } else {
+        Vec::new()
+    };
+    if build_shared && !heif_codec_flags.is_empty() {
+        cfg.define("CMAKE_SHARED_LINKER_FLAGS", heif_codec_flags.join(" "));
+    }
     // Control SMPTE ST 2094-50 (AGTM) dynamic metadata support. This is only
     // built when `vendored` is enabled upstream (FetchContent clones
     // webmproject/libsmpte2094-50 v0.1.4); with UHDR_BUILD_DEPS=OFF it is
@@ -519,6 +632,13 @@ fn main() {
         } else {
             println!("cargo:rustc-link-lib=heif");
         }
+        for flag in &heif_codec_flags {
+            if let Some(dir) = flag.strip_prefix("-L") {
+                println!("cargo:rustc-link-search=native={dir}");
+            } else if let Some(lib) = flag.strip_prefix("-l") {
+                println!("cargo:rustc-link-lib={lib}");
+            }
+        }
     }
 
     // SMPTE ST 2094-50 (AGTM) is provided by a FetchContent static library that
@@ -544,10 +664,21 @@ fn main() {
     if target_env != "msvc" {
         if is_wasm {
             if let Some((_, prefix)) = &wasi {
-                println!(
-                    "cargo:rustc-link-search=native={}/share/wasi-sysroot/lib/wasm32-wasip1",
-                    prefix.display()
-                );
+                let sysroot_lib = prefix.join("share/wasi-sysroot/lib/wasm32-wasip1");
+                println!("cargo:rustc-link-search=native={}", sysroot_lib.display());
+                // wasi-sdk >= 22 ships libc++ in `eh` (wasm exception handling) and `noeh`
+                // (exceptions disabled) variants instead of directly in the sysroot library
+                // directory. The C++ driver would pick one automatically, but the Rust link
+                // invokes wasm-ld itself, so add it explicitly. `noeh` matches the
+                // `-fno-exceptions` build above; older sysroots keep libc++ in the base directory,
+                // which is already on the search path.
+                for variant in ["noeh", "eh"] {
+                    let candidate = sysroot_lib.join(variant);
+                    if candidate.join("libc++.a").is_file() {
+                        println!("cargo:rustc-link-search=native={}", candidate.display());
+                        break;
+                    }
+                }
                 println!("cargo:rustc-link-lib=static=c++");
                 println!("cargo:rustc-link-lib=static=c++abi");
                 println!("cargo:rustc-link-lib=static=setjmp");
@@ -578,6 +709,8 @@ fn main() {
     if !is_wasm {
         bindings = bindings
             .allowlist_function("uhdr_.*")
+            // `is_uhdr_image` does not carry the `uhdr_` prefix, allowlist it explicitly.
+            .allowlist_function("is_uhdr_image")
             .allowlist_type("uhdr_.*")
             .allowlist_var("UHDR_.*");
     }
