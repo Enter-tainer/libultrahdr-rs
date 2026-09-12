@@ -27,9 +27,7 @@ vendored = []
 shared = []
 # Enable GLES in upstream build (links EGL/GLES).
 gles = []
-# Enable HEIF/HEIC & AVIF container support via libheif (needs `vendored` or a
-# system libheif with ISO 21496-1 gain-map API).
-heif = []
+
 # Enable SMPTE ST 2094-50 dynamic metadata (AGTM) support via libsmpte2094-50.
 smpte2094-50 = []
 # Enable writing ISO/TS 21496-1 gain map metadata.
@@ -42,7 +40,6 @@ xmp = []
 no-threads = []
 # Raise UHDR_MAX_DIMENSION to libjpeg-turbo's JPEG_MAX_DIMENSION.
 jpeg-max-dimension = []
-
 [dependencies]
 
 [build-dependencies]

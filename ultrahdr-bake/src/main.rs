@@ -51,12 +51,10 @@ fn resolve_out_path(args: &cli::BakeArgs, inputs: &detect::InputPair) -> PathBuf
 fn default_out_for_sdr(sdr_path: &Path) -> PathBuf {
     let parent = sdr_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = sdr_path.file_stem().unwrap_or_else(|| OsStr::new("sdr"));
-    let ext = sdr_path.extension().unwrap_or_else(|| OsStr::new("jpg"));
 
     let mut filename = stem.to_os_string();
     filename.push("-merge");
-    filename.push(".");
-    filename.push(ext);
+    filename.push(".jpg");
 
     let mut out = parent.to_path_buf();
     out.push(filename);
@@ -84,4 +82,34 @@ fn default_motion_out(photo_path: &Path) -> PathBuf {
     let mut out = parent.to_path_buf();
     out.push(filename);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bake_args(argv: &[&str]) -> cli::BakeArgs {
+        match cli::Cli::parse_from(argv).into_command() {
+            cli::Command::Bake(args) => args,
+            other => panic!("expected bake args, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn default_output_name_follows_the_sdr_input() {
+        let args = bake_args(&["ultrahdr-bake", "a.jpg", "b.jpg"]);
+
+        assert_eq!(args.out, None);
+        assert_eq!(
+            default_out_for_sdr(Path::new("dir/base.jpg")),
+            Path::new("dir/base-merge.jpg")
+        );
+    }
+
+    #[test]
+    fn explicit_out_wins_over_the_default_name() {
+        let args = bake_args(&["ultrahdr-bake", "--out", "custom.bin", "a.jpg", "b.jpg"]);
+
+        assert_eq!(args.out.as_deref(), Some(Path::new("custom.bin")));
+    }
 }

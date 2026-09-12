@@ -1,7 +1,10 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, ensure};
-use ultrahdr::{CompressedImage, Decoder, Encoder, ImgLabel, sys};
+use ultrahdr::{
+    ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, Decoder, Encoder,
+    ImageLabel, PixelFormat, Preset,
+};
 
 use crate::color::{detect_icc_color_gamut, gamut_label};
 use crate::detect::probe_gainmap_metadata;
@@ -18,59 +21,58 @@ pub fn run_encoding(
         );
     }
 
-    let mut hdr_bytes = fs::read(&inputs.hdr)
+    let hdr_bytes = fs::read(&inputs.hdr)
         .with_context(|| format!("Failed to read HDR UltraHDR file {}", inputs.hdr.display()))?;
-    let mut sdr_bytes = fs::read(&inputs.sdr)
+    let sdr_bytes = fs::read(&inputs.sdr)
         .with_context(|| format!("Failed to read SDR JPEG file {}", inputs.sdr.display()))?;
     let hdr_icc_gamut = detect_icc_color_gamut(&hdr_bytes);
     let sdr_icc_gamut = detect_icc_color_gamut(&sdr_bytes);
-    let gainmap_meta = probe_gainmap_metadata(&mut hdr_bytes)?;
+    let gainmap_meta = probe_gainmap_metadata(&hdr_bytes)?;
 
-    if let Some(cg) = hdr_icc_gamut {
-        println!("HDR ICC gamut: {}", gamut_label(cg));
+    if let Some(gamut) = hdr_icc_gamut {
+        println!("HDR ICC gamut: {}", gamut_label(gamut));
     }
-    if let Some(cg) = sdr_icc_gamut {
-        println!("SDR ICC gamut: {}", gamut_label(cg));
+    if let Some(gamut) = sdr_icc_gamut {
+        println!("SDR ICC gamut: {}", gamut_label(gamut));
     }
 
-    // Decode HDR intent from UltraHDR JPEG.
+    // Decode the HDR intent from the UltraHDR JPEG into PQ RGBA1010102 pixels.
     let mut dec = Decoder::new()?;
-    let mut hdr_comp = CompressedImage::from_bytes(
-        &mut hdr_bytes,
-        hdr_icc_gamut.unwrap_or(sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED),
-        sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
-        sys::uhdr_color_range::UHDR_CR_UNSPECIFIED,
-    );
-    dec.set_image(&mut hdr_comp)?;
-    let mut hdr_view = dec.decode_packed_view(
-        sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
-        sys::uhdr_color_transfer::UHDR_CT_PQ,
-    )?;
-    if hdr_view.meta().0 == sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED {
-        hdr_view
-            .set_color_gamut(hdr_icc_gamut.unwrap_or(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3));
-    }
-    if hdr_view.meta().1 == sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED {
-        hdr_view.set_color_transfer(sys::uhdr_color_transfer::UHDR_CT_PQ);
-    }
-    hdr_view.set_color_range(sys::uhdr_color_range::UHDR_CR_FULL_RANGE);
+    dec.set_image(&CompressedImage::with_aspects(
+        hdr_bytes.as_slice(),
+        ColorAspects::UNSPECIFIED.with_gamut(hdr_icc_gamut.unwrap_or(ColorGamut::DisplayP3)),
+    ))?;
+    let mut hdr_view = dec.decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)?;
 
-    // Encode with provided SDR base JPEG.
+    // Fill in anything the stream did not signal; the encoder needs complete aspects for raw input.
+    let mut aspects = hdr_view.aspects();
+    aspects.gamut = Some(
+        hdr_icc_gamut
+            .or(aspects.gamut)
+            .unwrap_or(ColorGamut::DisplayP3),
+    );
+    aspects.transfer = Some(aspects.transfer.unwrap_or(ColorTransfer::Pq));
+    aspects.range = Some(ColorRange::Full);
+    hdr_view.set_aspects(aspects);
+
+    // Encode with the provided SDR base JPEG.
     let mut enc = Encoder::new()?;
-    enc.set_raw_image_view(&mut hdr_view, ImgLabel::UHDR_HDR_IMG)?;
+    enc.set_decoded_image(ImageLabel::Hdr, &hdr_view)?;
 
-    let mut sdr_comp = CompressedImage::from_bytes(
-        &mut sdr_bytes,
-        sdr_icc_gamut.unwrap_or(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3),
-        sys::uhdr_color_transfer::UHDR_CT_SRGB,
-        sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
+    let sdr_aspects = ColorAspects::new(
+        sdr_icc_gamut.unwrap_or(ColorGamut::DisplayP3),
+        ColorTransfer::Srgb,
+        ColorRange::Full,
     );
-    enc.set_compressed_image(&mut sdr_comp, ImgLabel::UHDR_SDR_IMG)?;
+    enc.set_compressed_image(
+        ImageLabel::Sdr,
+        &CompressedImage::with_aspects(sdr_bytes.as_slice(), sdr_aspects),
+    )?;
 
-    enc.set_quality(args.base_quality, ImgLabel::UHDR_BASE_IMG)?;
-    enc.set_quality(args.gainmap_quality, ImgLabel::UHDR_GAIN_MAP_IMG)?;
+    enc.set_quality(ImageLabel::Base, args.base_quality)?;
+    enc.set_quality(ImageLabel::GainMap, args.gainmap_quality)?;
     enc.set_gainmap_scale_factor(args.gainmap_scale)?;
-    enc.set_using_multi_channel_gainmap(args.multichannel_gainmap)?;
+    enc.set_multi_channel_gainmap(args.multichannel_gainmap)?;
     enc.set_gainmap_gamma(1.0)?;
     let target_peak = args
         .target_peak_nits
@@ -85,15 +87,13 @@ pub fn run_encoding(
     }
     println!("Using target peak brightness: {:.1} nits", target_peak);
     enc.set_target_display_peak_brightness(target_peak)?;
-    enc.set_output_format(sys::uhdr_codec::UHDR_CODEC_JPG)?;
-    enc.set_preset(sys::uhdr_enc_preset::UHDR_USAGE_BEST_QUALITY)?;
+    enc.set_preset(Preset::BestQuality)?;
     enc.encode()?;
 
     let out_view = enc
         .encoded_stream()
         .context("Encode returned null output")?;
-    let out_bytes = out_view.bytes()?;
-    fs::write(out_path, out_bytes)
+    fs::write(out_path, out_view.bytes())
         .with_context(|| format!("Failed to write output {}", out_path.display()))?;
 
     println!("Wrote {}", out_path.display());

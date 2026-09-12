@@ -3,7 +3,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
-use ultrahdr::{CompressedImage, Decoder, Encoder, ImgFormat, ImgLabel, RawImage, sys};
+use ultrahdr::{
+    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, Decoder, Encoder,
+    ImageLabel, PixelFormat, Preset, RawImage,
+};
 
 #[derive(Debug, Parser)]
 #[command(about = "Rust port of ultrahdr_app: encode/decode UltraHDR streams")]
@@ -35,11 +38,11 @@ enum Command {
         #[arg(long)]
         height: u32,
         /// Base JPEG quality
-        #[arg(long, default_value_t = 95)]
-        base_q: i32,
+        #[arg(long, default_value_t = 95, value_parser = clap::value_parser!(u8).range(1..=100))]
+        base_q: u8,
         /// Gain map JPEG quality
-        #[arg(long, default_value_t = 95)]
-        gm_q: i32,
+        #[arg(long, default_value_t = 95, value_parser = clap::value_parser!(u8).range(1..=100))]
+        gm_q: u8,
         /// Gain map downscale factor
         #[arg(long, default_value_t = 1)]
         scale: i32,
@@ -72,8 +75,8 @@ struct EncodeArgs {
     out: PathBuf,
     width: u32,
     height: u32,
-    base_q: i32,
-    gm_q: i32,
+    base_q: u8,
+    gm_q: u8,
     scale: i32,
     mc: bool,
 }
@@ -86,11 +89,11 @@ enum RawFmt {
 }
 
 impl RawFmt {
-    fn to_img_fmt(&self) -> ImgFormat {
+    fn to_pixel_format(&self) -> PixelFormat {
         match self {
-            RawFmt::Rgba8888 => sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA8888,
-            RawFmt::Rgba1010102 => sys::uhdr_img_fmt::UHDR_IMG_FMT_32bppRGBA1010102,
-            RawFmt::RgbaF16 => sys::uhdr_img_fmt::UHDR_IMG_FMT_64bppRGBAHalfFloat,
+            RawFmt::Rgba8888 => PixelFormat::Rgba8888,
+            RawFmt::Rgba1010102 => PixelFormat::Rgba1010102,
+            RawFmt::RgbaF16 => PixelFormat::RgbaHalfFloat,
         }
     }
 }
@@ -103,11 +106,11 @@ enum Transfer {
 }
 
 impl Transfer {
-    fn to_ct(&self) -> sys::uhdr_color_transfer {
+    fn to_color_transfer(&self) -> ColorTransfer {
         match self {
-            Transfer::Pq => sys::uhdr_color_transfer::UHDR_CT_PQ,
-            Transfer::Hlg => sys::uhdr_color_transfer::UHDR_CT_HLG,
-            Transfer::Srgb => sys::uhdr_color_transfer::UHDR_CT_SRGB,
+            Transfer::Pq => ColorTransfer::Pq,
+            Transfer::Hlg => ColorTransfer::Hlg,
+            Transfer::Srgb => ColorTransfer::Srgb,
         }
     }
 }
@@ -161,47 +164,39 @@ fn encode(args: EncodeArgs) -> Result<()> {
         mc,
     } = args;
 
-    let mut hdr_bytes = fs::read(&hdr_raw_path)
+    let hdr_bytes = fs::read(&hdr_raw_path)
         .with_context(|| format!("Failed to read HDR raw {}", hdr_raw_path.display()))?;
-    let mut sdr_bytes = fs::read(&sdr_jpeg_path)
+    let sdr_bytes = fs::read(&sdr_jpeg_path)
         .with_context(|| format!("Failed to read SDR JPEG {}", sdr_jpeg_path.display()))?;
 
-    let fmt = hdr_fmt.to_img_fmt();
-    let mut hdr_raw = RawImage::packed(
-        fmt,
-        width,
-        height,
-        &mut hdr_bytes,
-        sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
-        sys::uhdr_color_transfer::UHDR_CT_PQ,
-        sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
-    )?;
+    let aspects = ColorAspects::new(ColorGamut::DisplayP3, ColorTransfer::Pq, ColorRange::Full);
+    let hdr_raw =
+        RawImage::from_packed(hdr_fmt.to_pixel_format(), width, height, hdr_bytes, aspects)?;
 
     let mut enc = Encoder::new()?;
-    enc.set_raw_image(&mut hdr_raw, ImgLabel::UHDR_HDR_IMG)?;
+    enc.set_raw_image(ImageLabel::Hdr, &hdr_raw)?;
+    enc.set_compressed_image(
+        ImageLabel::Sdr,
+        &CompressedImage::with_aspects(
+            sdr_bytes,
+            ColorAspects::new(ColorGamut::DisplayP3, ColorTransfer::Srgb, ColorRange::Full),
+        ),
+    )?;
 
-    let mut sdr_comp = CompressedImage::from_bytes(
-        &mut sdr_bytes,
-        sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3,
-        sys::uhdr_color_transfer::UHDR_CT_SRGB,
-        sys::uhdr_color_range::UHDR_CR_FULL_RANGE,
-    );
-    enc.set_compressed_image(&mut sdr_comp, ImgLabel::UHDR_SDR_IMG)?;
-
-    enc.set_quality(base_q, ImgLabel::UHDR_BASE_IMG)?;
-    enc.set_quality(gm_q, ImgLabel::UHDR_GAIN_MAP_IMG)?;
+    enc.set_quality(ImageLabel::Base, base_q)?;
+    enc.set_quality(ImageLabel::GainMap, gm_q)?;
     enc.set_gainmap_scale_factor(scale)?;
-    enc.set_using_multi_channel_gainmap(mc)?;
+    enc.set_multi_channel_gainmap(mc)?;
     enc.set_gainmap_gamma(1.0)?;
     enc.set_target_display_peak_brightness(10000.0)?;
-    enc.set_output_format(sys::uhdr_codec::UHDR_CODEC_JPG)?;
-    enc.set_preset(sys::uhdr_enc_preset::UHDR_USAGE_BEST_QUALITY)?;
+    enc.set_output_format(Codec::Jpeg)?;
+    enc.set_preset(Preset::BestQuality)?;
     enc.encode()?;
 
     let out_img = enc
         .encoded_stream()
         .context("Encode returned null output")?;
-    fs::write(&out_path, out_img.bytes()?)
+    fs::write(&out_path, out_img.bytes())
         .with_context(|| format!("Failed to write output {}", out_path.display()))?;
     println!("Wrote {}", out_path.display());
     Ok(())
@@ -213,24 +208,18 @@ fn decode(
     fmt: RawFmt,
     transfer: Transfer,
 ) -> Result<()> {
-    let mut uhdr_bytes =
+    let uhdr_bytes =
         fs::read(&uhdr_path).with_context(|| format!("Failed to read {}", uhdr_path.display()))?;
     let mut dec = Decoder::new()?;
-    let mut comp = CompressedImage::from_bytes(
-        &mut uhdr_bytes,
-        sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED,
-        sys::uhdr_color_transfer::UHDR_CT_UNSPECIFIED,
-        sys::uhdr_color_range::UHDR_CR_UNSPECIFIED,
-    );
-    dec.set_image(&mut comp)?;
+    dec.set_image(&CompressedImage::new(uhdr_bytes))?;
 
-    let img_fmt = fmt.to_img_fmt();
-    let decoded = dec.decode_packed_view(img_fmt, transfer.to_ct())?;
+    let img_fmt = fmt.to_pixel_format();
+    let color_transfer = transfer.to_color_transfer();
+    let decoded = dec.decode_as(img_fmt, color_transfer)?;
     let mut file = File::create(&out_raw_path)
         .with_context(|| format!("Failed to write {}", out_raw_path.display()))?;
-    for y in 0..decoded.height() as usize {
-        let row = decoded.row(y)?;
-        file.write_all(row)
+    for row in decoded.rows() {
+        file.write_all(row?)
             .with_context(|| format!("Failed to write {}", out_raw_path.display()))?;
     }
     println!(
@@ -240,7 +229,7 @@ fn decode(
         decoded.width(),
         decoded.height(),
         img_fmt,
-        transfer.to_ct()
+        color_transfer
     );
     Ok(())
 }

@@ -12,7 +12,8 @@ What this repo is: Rust bindings for Google's `libultrahdr` gain-map JPEG librar
 - Ensure submodules are present: `git submodule update --init --recursive`.
 - Tooling prerequisites: `cmake`, `ninja` (optional), `nasm`, `pkg-config`; add EGL/GLES headers if building with `--features gles`.
 - Default build (vendored deps): `cargo build -p ultrahdr-bake --release`.
-- WASM/WASI: target `wasm32-wasip1` with wasi-sdk (toolchain file at `/opt/wasi-sdk/share/cmake/wasi-sdk-p1.cmake`). `cargo build --target wasm32-wasip1 -p ultrahdr-bake --release` works with vendored deps after cloning `third_party/turbojpeg`. Run via wasmtime with import stubbing, e.g. `XDG_CACHE_HOME=$(pwd)/.cache wasmtime -W unknown-imports-default=yes --dir=. target/wasm32-wasip1/release/ultrahdr-bake.wasm --help`.
+- WASM/WASI: target `wasm32-wasip1` with wasi-sdk (toolchain file at `/opt/wasi-sdk/share/cmake/wasi-sdk-p1.cmake`). `cargo build --target wasm32-wasip1 -p ultrahdr-bake --release` works with vendored deps after cloning `third_party/turbojpeg`.
+- Run either wasm build via wasmtime with import stubbing, e.g. `XDG_CACHE_HOME=$(pwd)/.cache wasmtime -W unknown-imports-default=yes --dir=. target/wasm32-wasip1/release/ultrahdr-bake.wasm --help`.
 - CI parity checks:  
   `cargo fmt --all -- --check`  
   `cargo clippy --workspace --all-targets --all-features --locked`  
@@ -28,3 +29,5 @@ What this repo is: Rust bindings for Google's `libultrahdr` gain-map JPEG librar
 - Missing submodule or headers will surface as CMake failures in `ultrahdr-sys/build.rs`; check `ULTRAHDR_SRC_DIR` and prerequisites.
 - Vendored libjpeg-turbo needs `nasm`; without it the build will fail.
 - `shared` on MSVC links against `uhdr` (not `uhdr-static`); keep the DLL in PATH when running binaries.
+- wasi-sdk ≥ 22 ships libc++ in `eh`/`noeh` subdirectories and defaults C++ to wasm exception handling; `build.rs` therefore compiles the wasm C++ side with `-fno-exceptions` and links the `noeh` variant, because the `exnref`/`try_table` instructions it emits otherwise fail to instantiate in browsers (`browser_wasi_shim`-based `ultrahdr-browser` demo).
+- HEIF/HEIC and AVIF are deliberately absent: upstream implements them with libheif (LGPL-3.0), which cannot be statically linked into this Apache-2.0 crate's artifacts, so `build.rs` always passes `UHDR_ENABLE_HEIF=OFF` and `ultrahdr::Codec` has no container variant. Do not add a `heif` feature back without resolving that. The same reasoning rules out libde265 (LGPL-3.0) for HEVC decode; kvazaar (BSD-3) and libaom (BSD-2) are licence-clean but useless without a container implementation.

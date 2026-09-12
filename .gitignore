@@ -20,3 +20,8 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 *.jpg
+# Test fixtures are tracked on purpose.
+!ultrahdr/tests/data/*.jpg
+
+# Scratch cache used by the wasm32-wasip1 instructions in AGENTS.md.
+.cache/

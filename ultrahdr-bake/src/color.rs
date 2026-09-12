@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use img_parts::{ImageICC, jpeg::Jpeg};
-use ultrahdr::sys;
+use ultrahdr::ColorGamut;
 
 const MATCH_TOLERANCE: f32 = 0.005;
 
@@ -9,7 +9,7 @@ const PRIMARIES_DISPLAY_P3: [[f32; 2]; 3] = [[0.6800, 0.3200], [0.2650, 0.6900],
 const PRIMARIES_BT2100: [[f32; 2]; 3] = [[0.7080, 0.2920], [0.1700, 0.7970], [0.1310, 0.0460]];
 
 /// Best-effort ICC-based color gamut detection for a JPEG.
-pub fn detect_icc_color_gamut(bytes: &[u8]) -> Option<sys::uhdr_color_gamut> {
+pub fn detect_icc_color_gamut(bytes: &[u8]) -> Option<ColorGamut> {
     let icc_bytes = Jpeg::from_bytes(Bytes::copy_from_slice(bytes))
         .ok()?
         .icc_profile()?
@@ -25,12 +25,13 @@ pub fn detect_icc_color_gamut(bytes: &[u8]) -> Option<sys::uhdr_color_gamut> {
         .and_then(match_desc_hint)
 }
 
-pub fn gamut_label(cg: sys::uhdr_color_gamut) -> &'static str {
-    match cg {
-        sys::uhdr_color_gamut::UHDR_CG_BT_709 => "BT.709 / sRGB",
-        sys::uhdr_color_gamut::UHDR_CG_BT_2100 => "BT.2100 / Rec.2020",
-        sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3 => "Display P3",
-        sys::uhdr_color_gamut::UHDR_CG_UNSPECIFIED => "unspecified",
+pub fn gamut_label(gamut: ColorGamut) -> &'static str {
+    match gamut {
+        ColorGamut::Bt709 => "BT.709 / sRGB",
+        ColorGamut::Bt2100 => "BT.2100 / Rec.2020",
+        ColorGamut::DisplayP3 => "Display P3",
+        // `ColorGamut` is non-exhaustive: a newer libultrahdr may add primaries.
+        _ => "unknown",
     }
 }
 
@@ -41,13 +42,13 @@ fn parse_primaries(icc: &[u8]) -> Option<[[f32; 2]; 3]> {
     Some([xyz_to_xy(r)?, xyz_to_xy(g)?, xyz_to_xy(b)?])
 }
 
-fn match_primaries(primaries: &[[f32; 2]; 3]) -> Option<sys::uhdr_color_gamut> {
+fn match_primaries(primaries: &[[f32; 2]; 3]) -> Option<ColorGamut> {
     if primaries_close(primaries, &PRIMARIES_DISPLAY_P3) {
-        Some(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3)
+        Some(ColorGamut::DisplayP3)
     } else if primaries_close(primaries, &PRIMARIES_BT2100) {
-        Some(sys::uhdr_color_gamut::UHDR_CG_BT_2100)
+        Some(ColorGamut::Bt2100)
     } else if primaries_close(primaries, &PRIMARIES_BT709) {
-        Some(sys::uhdr_color_gamut::UHDR_CG_BT_709)
+        Some(ColorGamut::Bt709)
     } else {
         None
     }
@@ -131,14 +132,14 @@ fn profile_description(icc: &[u8]) -> Option<String> {
         .map(|s| s.trim_matches('\0').to_string())
 }
 
-fn match_desc_hint(desc: &str) -> Option<sys::uhdr_color_gamut> {
+fn match_desc_hint(desc: &str) -> Option<ColorGamut> {
     let lower = desc.to_ascii_lowercase();
     if lower.contains("p3") {
-        Some(sys::uhdr_color_gamut::UHDR_CG_DISPLAY_P3)
+        Some(ColorGamut::DisplayP3)
     } else if lower.contains("2020") || lower.contains("2100") {
-        Some(sys::uhdr_color_gamut::UHDR_CG_BT_2100)
+        Some(ColorGamut::Bt2100)
     } else if lower.contains("srgb") || lower.contains("709") {
-        Some(sys::uhdr_color_gamut::UHDR_CG_BT_709)
+        Some(ColorGamut::Bt709)
     } else {
         None
     }

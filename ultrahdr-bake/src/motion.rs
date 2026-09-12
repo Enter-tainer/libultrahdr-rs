@@ -56,8 +56,8 @@ pub fn run_motion(args: &MotionArgs, inputs: &MotionInputPair, out_path: &Path) 
         .with_context(|| format!("Failed to parse JPEG {}", inputs.photo.display()))?;
     let existing_xmp = take_existing_xmp(base_jpeg.segments_mut());
 
-    let mut probe_buf = photo_bytes.clone();
-    let gainmap_present = probe_gainmap_metadata(&mut probe_buf)?.is_some();
+    let probe_buf = photo_bytes.clone();
+    let gainmap_present = probe_gainmap_metadata(&probe_buf)?.is_some();
 
     let (primary_bytes, meta) = if gainmap_present {
         build_ultrahdr_motion(

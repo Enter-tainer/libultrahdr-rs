@@ -114,6 +114,12 @@ async function runCli(args: string[], outName: string) {
       longjmp: () => {
         throw new Error("longjmp called");
       },
+      // Kept as harmless no-ops: libheif's plugin registry used to import them, and a
+      // "nothing loaded" answer is the safe reply for any future dynamic loader.
+      dlopen: () => 0,
+      dlsym: () => 0,
+      dlclose: () => 0,
+      dlerror: () => 0,
     },
   });
   wasi.start(

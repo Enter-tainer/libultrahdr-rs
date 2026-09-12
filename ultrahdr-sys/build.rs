@@ -146,89 +146,6 @@ fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
         src_dir,
         &manifest_dir.join("patches/libultrahdr-no-threads.patch"),
     );
-    // libheif uses POSIX mkstemp(), which wasi-libc does not implement, so it
-    // fails to build for wasm32-wasip1. libheif is not present in the staged
-    // source here (the ExternalProject clones it *during* the CMake build), so
-    // instead of patching it directly we append the fix onto the existing
-    // cmake/patches/libheif_pr1503.patch, which the ExternalProject's
-    // PATCH_COMMAND git-applies to the cloned tree.
-    const MKSTEMP_FIX: &str = r#"
-diff --git a/libheif/box.cc b/libheif/box.cc
-index 3c8bdc86..dceb4c82 100644
---- a/libheif/box.cc
-+++ b/libheif/box.cc
-@@ -1506,7 +1506,12 @@ void Box_iloc::set_use_tmp_file(bool flag)
- {
-   m_use_tmpfile = flag;
-   if (flag) {
--#if !defined(_WIN32)
-+#if defined(__wasi__)
-+    // WASI has no mkstemp()/temp-file support in libc, so keep the item data in
-+    // memory instead of spilling it to a file.
-+    m_use_tmpfile = false;
-+    m_tmpfile_fd = -1;
-+#elif !defined(_WIN32)
-     strcpy(m_tmp_filename, "/tmp/libheif-XXXXXX");
-     m_tmpfile_fd = mkstemp(m_tmp_filename);
- #else
-diff --git a/libheif/pixelimage.cc b/libheif/pixelimage.cc
-index 04e81fe2..92be5bb9 100644
---- a/libheif/pixelimage.cc
-+++ b/libheif/pixelimage.cc
-@@ -275,23 +275,8 @@ Error HeifPixelImage::ImagePlane::alloc(uint32_t width, uint32_t height, heif_ch
-             sstr.str()};
-   }
- 
--  try {
--    allocated_mem = new uint8_t[static_cast<size_t>(m_mem_height) * stride + alignment - 1];
--    uint8_t* mem_8 = allocated_mem;
--
--    // shift beginning of image data to aligned memory position
--
--    auto mem_start_addr = (uint64_t) mem_8;
--    auto mem_start_offset = (mem_start_addr & (alignment - 1U));
--    if (mem_start_offset != 0) {
--      mem_8 += alignment - mem_start_offset;
--    }
--
--    mem = mem_8;
--
--    return Error::Ok;
--  }
--  catch (const std::bad_alloc& excpt) {
-+  allocated_mem = new (std::nothrow) uint8_t[static_cast<size_t>(m_mem_height) * stride + alignment - 1];
-+  if (allocated_mem == nullptr) {
-     std::stringstream sstr;
-     sstr << "Allocating " << static_cast<size_t>(m_mem_height) * stride + alignment - 1 << " bytes failed";
- 
-@@ -299,6 +284,19 @@ Error HeifPixelImage::ImagePlane::alloc(uint32_t width, uint32_t height, heif_ch
-             heif_suberror_Unspecified,
-             sstr.str()};
-   }
-+  uint8_t* mem_8 = allocated_mem;
-+
-+  // shift beginning of image data to aligned memory position
-+
-+  auto mem_start_addr = (uint64_t) mem_8;
-+  auto mem_start_offset = (mem_start_addr & (alignment - 1U));
-+  if (mem_start_offset != 0) {
-+    mem_8 += alignment - mem_start_offset;
-+  }
-+
-+  mem = mem_8;
-+
-+  return Error::Ok;
- }
- 
- 
-"#;
-    let heif_patch = src_dir.join("cmake/patches/libheif_pr1503.patch");
-    if heif_patch.is_file()
-        && let Ok(mut f) = fs::OpenOptions::new().append(true).open(&heif_patch)
-    {
-        use std::io::Write;
-        let _ = f.write_all(MKSTEMP_FIX.as_bytes());
-    }
 }
 
 fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathBuf {
@@ -275,6 +192,8 @@ fn main() {
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .layout_tests(false)
             .allowlist_function("uhdr_.*")
+            // `is_uhdr_image` does not carry the `uhdr_` prefix, allowlist it explicitly.
+            .allowlist_function("is_uhdr_image")
             .allowlist_type("uhdr_.*")
             .allowlist_var("UHDR_.*")
             .generate()
@@ -293,7 +212,6 @@ fn main() {
     }
 
     let patch_path = manifest_dir.join("patches/libultrahdr-no-threads.patch");
-    let libheif_patch_path = source_dir.join("cmake/patches/libheif_pr1503.patch");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SKIP_PATCHES");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PREFIX");
@@ -308,7 +226,6 @@ fn main() {
         source_dir.join("CMakeLists.txt").display()
     );
     println!("cargo:rerun-if-changed={}", patch_path.display());
-    println!("cargo:rerun-if-changed={}", libheif_patch_path.display());
 
     let src_dir = prepare_src_dir(&manifest_dir, &source_dir, &out_dir);
 
@@ -337,6 +254,7 @@ fn main() {
 
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release");
+
     // Shrink the wasm by size-optimizing + LTO the C++ side (libjpeg-turbo and
     // libultrahdr). The wasm link already uses `--gc-sections` to drop unreached
     // C++, but -Oz keeps the reachable code compact and -flto lets rust-lld run
@@ -348,8 +266,16 @@ fn main() {
         cfg.cxxflag("-Oz");
         cfg.cflag("-flto");
         cfg.cxxflag("-flto");
+        // wasi-sdk >= 22 defaults C++ to wasm exception handling, which emits the `exnref` and
+        // `try_table` instructions that browsers cannot run yet (and which the WASI shim used by
+        // the web demo does not model). libultrahdr never throws, so build the C++ side without
+        // exceptions and link the matching `noeh` libc++ instead; see the link section below.
+        cfg.cxxflag("-fno-exceptions");
         cfg.define("CMAKE_C_FLAGS_RELEASE", "-Oz -flto -DNDEBUG");
-        cfg.define("CMAKE_CXX_FLAGS_RELEASE", "-Oz -flto -DNDEBUG");
+        cfg.define(
+            "CMAKE_CXX_FLAGS_RELEASE",
+            "-Oz -flto -fno-exceptions -DNDEBUG",
+        );
     }
     if let Some((toolchain, prefix)) = &wasi {
         if !toolchain.is_file() {
@@ -403,14 +329,11 @@ fn main() {
     if cfg!(feature = "gles") {
         cfg.define("UHDR_ENABLE_GLES", "ON");
     }
-    // Control HEIF/AVIF container support via libheif. NOTE: upstream v2.0+
-    // defaults UHDR_ENABLE_HEIF to ON, so we must explicitly disable it unless
-    // the `heif` feature is requested; otherwise the default vendored build
-    // would fetch and build libheif as a dependency.
-    cfg.define(
-        "UHDR_ENABLE_HEIF",
-        if cfg!(feature = "heif") { "ON" } else { "OFF" },
-    );
+    // HEIF/HEIC and AVIF are deliberately unsupported: upstream's `UHDR_ENABLE_HEIF` pulls in
+    // libheif (LGPL-3.0), which cannot be statically linked into this crate's Apache-2.0 artifacts
+    // in a redistributable way. Upstream defaults the switch to ON, so it has to be turned off
+    // explicitly - leaving it alone would fetch and build libheif for every vendored build.
+    cfg.define("UHDR_ENABLE_HEIF", "OFF");
     // Control SMPTE ST 2094-50 (AGTM) dynamic metadata support. This is only
     // built when `vendored` is enabled upstream (FetchContent clones
     // webmproject/libsmpte2094-50 v0.1.4); with UHDR_BUILD_DEPS=OFF it is
@@ -494,35 +417,6 @@ fn main() {
         println!("cargo:rustc-link-lib=jpeg");
     }
 
-    // When HEIF/AVIF support is enabled, the upstream CMake builds libheif as a
-    // static ExternalProject (vendored) or links a system libheif (non-vendored).
-    // `uhdr`/`core` link it PRIVATE, so the final Rust executable must pull it in.
-    if cfg!(feature = "heif") {
-        if cfg!(feature = "vendored") {
-            // Bundled libheif static archive (non-multi build) lives at
-            // <dst>/build/libheif/src/libheif-build/libheif/libheif.a
-            println!(
-                "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif",
-                dst.display()
-            );
-            if target_env == "msvc" {
-                println!(
-                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Release",
-                    dst.display()
-                );
-                println!(
-                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Debug",
-                    dst.display()
-                );
-            }
-            println!("cargo:rustc-link-lib=static=heif");
-        } else {
-            println!("cargo:rustc-link-lib=heif");
-        }
-    }
-
-    // SMPTE ST 2094-50 (AGTM) is provided by a FetchContent static library that
-    // `uhdr`/`core` link PRIVATE, so expose it to the final link too. The
     // FetchContent build only runs when `vendored` (UHDR_BUILD_DEPS=ON) is set;
     // without it upstream warns and disables SMPTE, so don't emit a bogus -l.
     if cfg!(feature = "smpte2094-50") && cfg!(feature = "vendored") {
@@ -544,10 +438,21 @@ fn main() {
     if target_env != "msvc" {
         if is_wasm {
             if let Some((_, prefix)) = &wasi {
-                println!(
-                    "cargo:rustc-link-search=native={}/share/wasi-sysroot/lib/wasm32-wasip1",
-                    prefix.display()
-                );
+                let sysroot_lib = prefix.join("share/wasi-sysroot/lib/wasm32-wasip1");
+                println!("cargo:rustc-link-search=native={}", sysroot_lib.display());
+                // wasi-sdk >= 22 ships libc++ in `eh` (wasm exception handling) and `noeh`
+                // (exceptions disabled) variants instead of directly in the sysroot library
+                // directory. The C++ driver would pick one automatically, but the Rust link
+                // invokes wasm-ld itself, so add it explicitly. `noeh` matches the
+                // `-fno-exceptions` build above; older sysroots keep libc++ in the base directory,
+                // which is already on the search path.
+                for variant in ["noeh", "eh"] {
+                    let candidate = sysroot_lib.join(variant);
+                    if candidate.join("libc++.a").is_file() {
+                        println!("cargo:rustc-link-search=native={}", candidate.display());
+                        break;
+                    }
+                }
                 println!("cargo:rustc-link-lib=static=c++");
                 println!("cargo:rustc-link-lib=static=c++abi");
                 println!("cargo:rustc-link-lib=static=setjmp");
@@ -578,6 +483,8 @@ fn main() {
     if !is_wasm {
         bindings = bindings
             .allowlist_function("uhdr_.*")
+            // `is_uhdr_image` does not carry the `uhdr_` prefix, allowlist it explicitly.
+            .allowlist_function("is_uhdr_image")
             .allowlist_type("uhdr_.*")
             .allowlist_var("UHDR_.*");
     }
