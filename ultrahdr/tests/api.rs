@@ -70,12 +70,12 @@ fn sdr_420_planes(width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
 /// Y plane and interleaved UV plane of a 10-bit P010 image.
 fn hdr_p010_planes(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
     let mut y = vec![0u8; (width * height * 2) as usize];
-    for (i, sample) in y.chunks_exact_mut(2).enumerate() {
+    for (i, sample) in y.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         let value = ((i as u32 * 7) % 1024) << 6;
         sample.copy_from_slice(&(value as u16).to_le_bytes());
     }
     let mut uv = vec![0u8; (width * (height / 2) * 2) as usize];
-    for (i, sample) in uv.chunks_exact_mut(2).enumerate() {
+    for (i, sample) in uv.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         let value = (if i % 2 == 0 { 512u32 } else { 480u32 }) << 6;
         sample.copy_from_slice(&(value as u16).to_le_bytes());
     }
