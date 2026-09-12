@@ -480,16 +480,17 @@ impl From<ImageLabel> for sys::uhdr_img_label_t {
     }
 }
 
-/// Container format produced by [`Encoder::set_output_format`](crate::Encoder::set_output_format).
+/// Output format produced by [`Encoder::set_output_format`](crate::Encoder::set_output_format).
+///
+/// Only JPEG is available. HEIF/HEIC and AVIF are implemented in libheif, which is LGPL-3.0 and
+/// therefore not linked into this crate; see the `heif` note in the README. The enum stays
+/// `#[non_exhaustive]` so a container format can be added if a compatibly licensed implementation
+/// appears.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Codec {
     /// Single JPEG holding the SDR base image plus the gain map.
     Jpeg,
-    /// HEIF container (requires the `heif` feature of `ultrahdr-sys`).
-    Heif,
-    /// AVIF container (requires the `heif` feature of `ultrahdr-sys`).
-    Avif,
 }
 
 impl Codec {
@@ -497,8 +498,6 @@ impl Codec {
         use sys::uhdr_codec::*;
         match self {
             Self::Jpeg => UHDR_CODEC_JPG,
-            Self::Heif => UHDR_CODEC_HEIF,
-            Self::Avif => UHDR_CODEC_AVIF,
         }
     }
 }
@@ -800,7 +799,7 @@ fn ensure_capacity(buffer: &[u8], required: usize, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// A compressed (JPEG/HEIF/AVIF) image, either as encoder input or the result of encoding.
+/// A compressed JPEG image, either as encoder input or the result of encoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressedImage {
     data: Vec<u8>,

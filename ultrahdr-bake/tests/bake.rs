@@ -20,9 +20,6 @@ use ultrahdr::{
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
 
-/// Gain map scale factor that turns the 240-row fixture into a 15-row (odd) gain map.
-const ODD_GAIN_MAP_SCALE: &str = "16";
-
 const HDR_ASPECTS: ColorAspects =
     ColorAspects::new(ColorGamut::DisplayP3, ColorTransfer::Pq, ColorRange::Full);
 
@@ -127,43 +124,5 @@ fn default_output_name_follows_the_format() {
         dir.join("plain-merge.jpg").is_file(),
         "expected plain-merge.jpg in {}",
         dir.display()
-    );
-}
-
-#[cfg(feature = "heif")]
-#[test]
-fn bakes_avif_with_a_single_channel_gain_map_fallback() {
-    let dir = scratch("avif");
-    let (hdr, sdr) = write_fixtures(&dir);
-
-    let out = dir.join("out.avif");
-    let result = bake(&[
-        "--hdr",
-        hdr.to_str().expect("hdr path"),
-        "--sdr",
-        sdr.to_str().expect("sdr path"),
-        "--format",
-        "avif",
-        "--scale",
-        ODD_GAIN_MAP_SCALE,
-        "--out",
-        out.to_str().expect("out path"),
-    ]);
-    assert!(
-        result.status.success(),
-        "CLI failed: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-
-    let bytes = fs::read(&out).expect("output file");
-    assert_eq!(&bytes[4..8], b"ftyp", "not an ISO BMFF file");
-    assert_eq!(&bytes[8..12], b"avif", "not an AVIF file");
-
-    // The default is a multi-channel gain map, which upstream cannot write into a container when
-    // the gain map height is odd (240 / 16 = 15 rows here).
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(
-        stderr.contains("single-channel"),
-        "expected the single-channel fallback warning, got: {stderr}"
     );
 }

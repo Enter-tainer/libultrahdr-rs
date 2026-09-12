@@ -36,14 +36,8 @@ use std::ptr::NonNull;
 #[derive(Debug)]
 pub struct Encoder {
     raw: NonNull<sys::uhdr_codec_private_t>,
-    /// Mirrored configuration, used by [`encode`](Self::encode) to reject combinations that make
-    /// upstream corrupt the heap.
+    /// Mirrored output format, reset by [`reset`](Self::reset).
     output_format: Codec,
-    multi_channel_gainmap: bool,
-    gainmap_scale_factor: i32,
-    /// Size of the registered uncompressed intents, which decides the gain map size.
-    hdr_size: Option<(u32, u32)>,
-    sdr_size: Option<(u32, u32)>,
 }
 
 impl Encoder {
@@ -55,10 +49,6 @@ impl Encoder {
         Ok(Self {
             raw,
             output_format: Codec::Jpeg,
-            multi_channel_gainmap: false,
-            gainmap_scale_factor: 1,
-            hdr_size: None,
-            sdr_size: None,
         })
     }
 
@@ -68,13 +58,7 @@ impl Encoder {
     pub fn set_raw_image(&mut self, label: ImageLabel, image: &RawImage) -> Result<()> {
         let mut raw = image.as_sys();
         // SAFETY: the library copies the described planes during the call.
-        let result = check(unsafe {
-            sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), &mut raw, label.to_sys())
-        });
-        if result.is_ok() {
-            self.remember_size(label, (raw.w, raw.h));
-        }
-        result
+        check(unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), &mut raw, label.to_sys()) })
     }
 
     /// Register pixels decoded by a [`Decoder`](crate::Decoder) without copying them first.
@@ -84,13 +68,7 @@ impl Encoder {
     pub fn set_decoded_image(&mut self, label: ImageLabel, image: &DecodedView<'_>) -> Result<()> {
         let mut raw = image.as_sys();
         // SAFETY: the library copies the described planes during the call.
-        let result = check(unsafe {
-            sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), &mut raw, label.to_sys())
-        });
-        if result.is_ok() {
-            self.remember_size(label, (raw.w, raw.h));
-        }
-        result
+        check(unsafe { sys::uhdr_enc_set_raw_image(self.raw.as_ptr(), &mut raw, label.to_sys()) })
     }
 
     /// Register a pre-compressed image (JPEG) as the `label` intent.
@@ -174,23 +152,17 @@ impl Encoder {
 
     /// Set the gain map scale factor (larger values bias towards HDR detail).
     pub fn set_gainmap_scale_factor(&mut self, factor: i32) -> Result<()> {
-        check(unsafe { sys::uhdr_enc_set_gainmap_scale_factor(self.raw.as_ptr(), factor) })?;
-        self.gainmap_scale_factor = factor;
-        Ok(())
+        check(unsafe { sys::uhdr_enc_set_gainmap_scale_factor(self.raw.as_ptr(), factor) })
     }
 
     /// Enable or disable multi-channel gain maps.
     ///
-    /// Upstream cannot write a multi-channel gain map into a HEIF/AVIF stream when the gain map
-    /// height is odd: it walks past the last row and corrupts the heap. [`encode`](Self::encode)
-    /// rejects that combination instead of crashing, so callers that hit it should fall back to
-    /// single-channel gain maps (or pick a scale factor that yields an even height).
+    /// Multi-channel gain maps keep more of the HDR colour detail at the cost of size;
+    /// single-channel maps store luminance only.
     pub fn set_multi_channel_gainmap(&mut self, enable: bool) -> Result<()> {
         check(unsafe {
             sys::uhdr_enc_set_using_multi_channel_gainmap(self.raw.as_ptr(), i32::from(enable))
-        })?;
-        self.multi_channel_gainmap = enable;
-        Ok(())
+        })
     }
 
     /// Adjust the gain map gamma curve.
@@ -208,7 +180,10 @@ impl Encoder {
         check(unsafe { sys::uhdr_enc_set_preset(self.raw.as_ptr(), preset.to_sys()) })
     }
 
-    /// Choose the container produced by [`encode`](Self::encode).
+    /// Choose the format produced by [`encode`](Self::encode).
+    ///
+    /// Only [`Codec::Jpeg`] exists: HEIF/HEIC and AVIF would require libheif (LGPL-3.0), which
+    /// this crate deliberately does not link.
     pub fn set_output_format(&mut self, codec: Codec) -> Result<()> {
         check(unsafe { sys::uhdr_enc_set_output_format(self.raw.as_ptr(), codec.to_sys()) })?;
         self.output_format = codec;
@@ -219,44 +194,9 @@ impl Encoder {
     ///
     /// # Errors
     ///
-    /// Rejects one configuration that upstream cannot handle safely: a multi-channel gain map with
-    /// an odd height combined with HEIF/AVIF output (see
-    /// [`set_multi_channel_gainmap`](Self::set_multi_channel_gainmap)).
+    /// Returns [`Error::Codec`] when the library rejects the configuration.
     pub fn encode(&mut self) -> Result<()> {
-        self.check_gainmap_height()?;
         check(unsafe { sys::uhdr_encode(self.raw.as_ptr()) })
-    }
-
-    /// Remember the size of an intent so [`check_gainmap_height`](Self::check_gainmap_height) can
-    /// reproduce upstream's gain map size.
-    fn remember_size(&mut self, label: ImageLabel, size: (u32, u32)) {
-        match label {
-            ImageLabel::Hdr => self.hdr_size = Some(size),
-            ImageLabel::Sdr => self.sdr_size = Some(size),
-            ImageLabel::Base | ImageLabel::GainMap => {}
-        }
-    }
-
-    /// Upstream's HEIF/AVIF encoders convert a multi-channel gain map to YCbCr row by row; with an
-    /// odd gain map height the last row overruns the plane and the allocator aborts. Reject the
-    /// combination rather than corrupting the heap. Upstream sizes the gain map as
-    /// `intent size / scale factor` (integer division), so mirror that here.
-    fn check_gainmap_height(&self) -> Result<()> {
-        if !self.multi_channel_gainmap || self.output_format == Codec::Jpeg {
-            return Ok(());
-        }
-        let Some((_, height)) = self.sdr_size.or(self.hdr_size) else {
-            return Ok(());
-        };
-        let map_height = height / self.gainmap_scale_factor.max(1) as u32;
-        if map_height % 2 == 1 {
-            return Err(Error::UnsupportedFeature(format!(
-                "libultrahdr writes past the end of the gain map when a HEIF/AVIF stream carries a \
-                 multi-channel gain map with an odd height ({map_height} rows); use a single-channel \
-                 gain map or a scale factor that yields an even height"
-            )));
-        }
-        Ok(())
     }
 
     /// Borrow the stream produced by [`encode`](Self::encode), if any.
@@ -304,10 +244,6 @@ impl Encoder {
         // SAFETY: the handle is valid and owned by `self`.
         unsafe { sys::uhdr_reset_encoder(self.raw.as_ptr()) }
         self.output_format = Codec::Jpeg;
-        self.multi_channel_gainmap = false;
-        self.gainmap_scale_factor = 1;
-        self.hdr_size = None;
-        self.sdr_size = None;
     }
 }
 

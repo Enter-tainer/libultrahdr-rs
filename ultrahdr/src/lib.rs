@@ -1,6 +1,6 @@
 //! Safe, idiomatic Rust bindings for Google's [`libultrahdr`] gain map codec.
 //!
-//! [`libultrahdr`] reads and writes UltraHDR images: a JPEG (or HEIF/AVIF) stream that carries an
+//! [`libultrahdr`] reads and writes UltraHDR images: a JPEG stream that carries an
 //! SDR base image plus a gain map, allowing a renderer to reconstruct an HDR rendition. This crate
 //! wraps the C API with owning image types, Rust enums instead of C constants and descriptive
 //! errors, while [`sys`] re-exports the raw bindings for anything not covered here.
@@ -151,7 +151,7 @@ mod tests {
             ImageLabel::GainMap.to_sys(),
             sys::uhdr_img_label_t::UHDR_GAIN_MAP_IMG
         );
-        assert!(Codec::Avif.to_sys() == sys::uhdr_codec_t::UHDR_CODEC_AVIF);
+        assert!(Codec::Jpeg.to_sys() == sys::uhdr_codec_t::UHDR_CODEC_JPG);
         assert!(Preset::Realtime.to_sys() == sys::uhdr_enc_preset_t::UHDR_USAGE_REALTIME);
         assert_eq!(
             sys::uhdr_mirror_direction_t::from(Mirror::Horizontal),

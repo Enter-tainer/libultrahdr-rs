@@ -41,10 +41,6 @@ target/release/ultrahdr-bake \
 # Or let the tool auto-detect which JPEG is HDR vs SDR
 target/release/ultrahdr-bake photo1.jpg photo2.jpg
 
-# Write AVIF/HEIF instead of JPEG (needs the `heif` feature)
-cargo build -p ultrahdr-bake --release --features heif
-target/release/ultrahdr-bake --hdr hdr_gainmap.jpg --sdr base_sdr.jpg --format avif --out out.avif
-
 # Build a Motion Photo (v2 metadata) from a still + MP4
 target/release/ultrahdr-bake motion \
   --photo ultrahdr_out.jpg \
@@ -56,19 +52,22 @@ target/release/ultrahdr-bake motion \
 pnpm --dir ultrahdr-browser install --frozen-lockfile
 pnpm --dir ultrahdr-browser build
 ```
-使用默认特性构建 CLI 并编码 UltraHDR 的示例如上；`--format jpeg|avif|heif` 用于选择输出容器（AVIF/HEIF 需 `heif` 特性）。
+使用默认特性构建 CLI 并编码 UltraHDR 的示例如上；输出固定为携带增益图的 UltraHDR JPEG。
 
 Baking defaults to RGB multi-channel gain maps, gain map JPEG quality 100, and scale 1 to preserve HDR colors. Use `--multichannel=false` for a single-channel gain map or `--gm-q` to reduce quality and file size.
 
 合并默认使用 RGB 三通道增益图、增益图 JPEG 质量 100、缩放因子 1，以保留 HDR 颜色。可通过 `--multichannel=false` 切换为单通道，或用 `--gm-q` 降低质量以减小文件体积。
 
-HEIF/AVIF output keeps the base image inside the container, so libultrahdr encodes those formats from
-raw intents: the CLI decodes the SDR JPEG itself and submits raw pixels. Upstream also corrupts the
-heap when a container carries a multi-channel gain map whose height is odd, so `--format avif|heif`
-falls back to a single-channel gain map and warns instead of aborting. /
-HEIF/AVIF 会把基础图放进容器，libultrahdr 对这两种格式要求原始（raw）输入，因此 CLI 自行解码 SDR JPEG
-再提交 raw 像素。另外，容器内多通道增益图高度为奇数时上游会破坏堆内存，所以 `--format avif|heif`
-会自动回退成单通道增益图并打印警告，而不是直接崩溃。
+HEIF/HEIC and AVIF output is deliberately not offered. Upstream implements it through libheif, which
+is LGPL-3.0: statically linking that into this crate's Apache-2.0 artifacts (this CLI, the wasm demo,
+the release binaries) is not a combination we can redistribute, and a dynamic dependency would not
+help the wasm target at all. `ultrahdr-sys` therefore pins upstream's `UHDR_ENABLE_HEIF=OFF`, and
+`ultrahdr::Codec` only contains `Jpeg`. Enable it in your own fork/build only after resolving the
+licence question. /
+HEIF/HEIC 与 AVIF 输出是**有意不支持**的：上游用 libheif 实现，而 libheif 是 LGPL-3.0，静态链接进本
+项目 Apache-2.0 的产物（CLI、wasm 演示、发布二进制）无法合规分发，改成动态链接对 wasm 目标也没有意义。
+因此 `ultrahdr-sys` 固定传入上游的 `UHDR_ENABLE_HEIF=OFF`，`ultrahdr::Codec` 也只保留 `Jpeg`。如果你
+要自己启用，请先解决许可问题。
 
 Browser demo: deploys under root by default; GitHub Pages build sets `VITE_BASE_PATH=/libultrahdr-rs/`. The wasm (`ultrahdr-bake.wasm`) is fetched relative to `import.meta.env.BASE_URL`. /
 浏览器演示：默认以根路径部署；在 GitHub Pages 上构建时使用 `VITE_BASE_PATH=/libultrahdr-rs/`，WASM（`ultrahdr-bake.wasm`）从 `import.meta.env.BASE_URL` 相对路径加载。
@@ -131,7 +130,11 @@ instead of the C constants; `ultrahdr::sys` re-exports the raw bindings for anyt
 - `vendored` (default): build libjpeg-turbo and other deps from source. / `vendored`（默认）：从源码构建 libjpeg-turbo 等依赖。
 - `shared`: link dynamically against `libuhdr`. / `shared`：动态链接 `libuhdr`。
 - `gles`: enable EGL/GLES support in upstream CMake. / `gles`：在上游启用 EGL/GLES 支持。
-- `heif`: HEIF/HEIC and AVIF containers via libheif (one upstream switch covers both; needs network at build time, or a system libheif with the ISO 21496-1 API). libheif only supplies the container plumbing, so the codec set is provisioned per target and reported as a build warning: native builds use the host's codec libraries and fail to build if none of them is present, while `wasm32-wasip1` cross-compiles libaom (AVIF works, HEVC has no WASI port). / `heif`：通过 libheif 支持 HEIF/HEIC 与 AVIF 容器（上游只有一个开关同时覆盖两者）。libheif 只提供容器能力，codec 按目标平台供给并以构建警告列出：宿主构建使用系统的 codec 库、一个都没有时直接构建失败；`wasm32-wasip1` 则交叉编译 libaom（AVIF 可用，HEVC 没有 WASI 移植）。
+- HEIF/HEIC and AVIF are **not** available: they need libheif (LGPL-3.0), which is incompatible with
+  redistributing this Apache-2.0 crate, so upstream's `UHDR_ENABLE_HEIF` is forced `OFF` and there is
+  no feature to turn it back on. See the note above. / HEIF/HEIC 与 AVIF **不可用**：它们依赖 LGPL-3.0
+  的 libheif，与本项目的 Apache-2.0 分发不兼容，因此上游的 `UHDR_ENABLE_HEIF` 被固定为 `OFF`，也没有
+  任何 feature 能重新打开。
 - `iso21496` (default): emit ISO/TS 21496-1 gain map metadata. / `iso21496`（默认）：写入 ISO/TS 21496-1 增益图元数据。
 - `xmp` (default): also write XMP (`GContainer` + `hdrgm`) gain map metadata for older readers. / `xmp`（默认）：同时写入 XMP 元数据，兼容旧版读取器。
 - `smpte2094-50`: SMPTE ST 2094-50 dynamic metadata (AGTM). / `smpte2094-50`：SMPTE ST 2094-50 动态元数据（AGTM）。

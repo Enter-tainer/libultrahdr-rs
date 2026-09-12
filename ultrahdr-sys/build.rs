@@ -38,236 +38,6 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Link flags for the codec libraries the vendored libheif was built against.
-///
-/// libheif links its codecs (libaom, x265, dav1d, ...) PRIVATE, so `aom_*`/`x265_*` symbols stay
-/// undefined in the `libheif.a` archive. Anything that pulls that archive in — the Rust
-/// executable and a shared `libuhdr` alike — therefore has to add the codecs itself, otherwise the
-/// static link fails and the shared object fails to load at runtime. Only libraries that are
-/// actually present are emitted, so this is a no-op on systems whose libheif has no such codecs.
-fn libheif_codec_link_flags() -> Vec<String> {
-    let mut flags: Vec<String> = Vec::new();
-    for (package, lib_name, _) in HEIF_CODECS.iter().copied() {
-        let candidate = match Command::new("pkg-config")
-            .args(["--libs", package])
-            .output()
-        {
-            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-            // No pkg-config (or the package is unknown): fall back to a plain existence probe.
-            _ if library_present(lib_name) => vec![format!("-l{lib_name}")],
-            _ => continue,
-        };
-        for flag in candidate {
-            if !flags.contains(&flag) {
-                flags.push(flag);
-            }
-        }
-    }
-    flags
-}
-
-/// Whether `lib<name>.so`/`.a`/`.dylib` exists in one of the usual library directories.
-fn library_present(name: &str) -> bool {
-    const DIRS: [&str; 6] = [
-        "/usr/lib",
-        "/usr/lib64",
-        "/usr/local/lib",
-        "/usr/lib/x86_64-linux-gnu",
-        "/usr/lib/aarch64-linux-gnu",
-        "/opt/homebrew/lib",
-    ];
-    DIRS.iter().any(|dir| {
-        let dir = Path::new(dir);
-        ["so", "a", "dylib"]
-            .iter()
-            .any(|extension| dir.join(format!("lib{name}.{extension}")).exists())
-    })
-}
-
-/// Run a command from the build script, failing loudly with the full command line.
-fn run_command(cmd: &mut Command) {
-    let status = cmd
-        .status()
-        .unwrap_or_else(|error| panic!("failed to spawn {cmd:?}: {error}"));
-    assert!(status.success(), "command failed: {cmd:?}");
-}
-
-/// libaom release cross-compiled for wasm, pinned so the codec build is reproducible.
-const WASM_AOM_VERSION: &str = "v3.15.0";
-
-/// Whether this compilation cross-compiles libaom for the target.
-///
-/// A wasm `heif` build always needs it: libheif provides the container plumbing only, and a host
-/// codec cannot be linked into a wasm module.
-fn wasm_libaom_needed(target: &str) -> bool {
-    is_wasm_target(target) && cfg!(feature = "heif")
-}
-
-/// Codec libraries libheif picks up for the HEIF/AVIF containers:
-/// `(pkg-config package, library name, label)`.
-const HEIF_CODECS: &[(&str, &str, &str)] = &[
-    ("x265", "x265", "x265 (HEVC: HEIC encode)"),
-    ("aom", "aom", "libaom (AV1: AVIF encode + decode)"),
-    ("dav1d", "dav1d", "dav1d (AV1: AVIF decode)"),
-    ("libde265", "de265", "libde265 (HEVC: HEIC decode)"),
-    ("rav1e", "rav1e", "rav1e (AV1 encode)"),
-    ("SvtAv1Enc", "SvtAv1Enc", "SVT-AV1 (AV1 encode)"),
-    ("vvenc", "vvenc", "vvenc (VVC encode)"),
-];
-
-/// Whether `pkg-config` knows a library, i.e. whether libheif's CMake probe will find it here.
-///
-/// Follows the `pkg-config` crate's conventions: `PKG_CONFIG` selects the executable, and
-/// `PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR` extend the search. A `libheif` build that ends up with
-/// zero codecs can only parse containers, so this is also the check the `heif` feature relies on.
-fn pkg_config_has(package: &str) -> bool {
-    let opt_out = format!("{}_NO_PKG_CONFIG", package.to_uppercase().replace('-', "_"));
-    println!("cargo:rerun-if-env-changed={opt_out}");
-    if env::var(&opt_out).is_ok_and(|value| value != "0") {
-        return false;
-    }
-    let pkg_config = env::var_os("PKG_CONFIG").unwrap_or_else(|| "pkg-config".into());
-    Command::new(pkg_config)
-        .arg("--exists")
-        .arg(package)
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// Whether a codec is available for libheif on this host: pkg-config knows it, or at least the
-/// library file is installed (which libheif's `find_package` accepts too).
-fn heif_codec_available(package: &str, lib_name: &str) -> bool {
-    pkg_config_has(package) || library_present(lib_name)
-}
-
-/// Fail the build with an actionable message.
-///
-/// `cargo::error` (Cargo >= 1.84, and this workspace needs 1.85 for edition 2024) renders the
-/// message as the build error instead of an opaque panic backtrace.
-fn build_error(message: &str) -> ! {
-    println!("cargo::error={message}");
-    std::process::exit(1);
-}
-
-/// Cross-compile libaom for wasm32-wasip1 and return a prefix that libheif's `find_package(AOM)`
-/// can consume.
-///
-/// libheif needs a codec library to do more than parse containers, and a host codec cannot be
-/// linked into a wasm module. libaom is the portable choice: it has a `generic` target (no x86
-/// SIMD), builds single-threaded, and its setjmp-based error handling maps onto the
-/// `env.setjmp`/`env.longjmp` imports that wasi-libc's `libsetjmp.a` already produces (the browser
-/// demo stubs those). HEVC is deliberately out of scope: x265/libde265 have no comparable WASI
-/// port, so wasm gets AVIF only.
-///
-/// The result is cached in `OUT_DIR`, so later builds reuse the archive instead of rebuilding it.
-/// Set `ULTRAHDR_AOM_SRC` to an existing libaom checkout to skip the clone entirely.
-fn build_wasm_libaom(out_dir: &Path, wasi_prefix: &Path) -> PathBuf {
-    let prefix = out_dir.join("aom-wasm-prefix");
-    let archive = prefix.join("lib/libaom.a");
-    let pkg_config = prefix.join("lib/pkgconfig/aom.pc");
-    if archive.is_file() && pkg_config.is_file() {
-        return prefix;
-    }
-
-    let src = match env::var_os("ULTRAHDR_AOM_SRC") {
-        Some(dir) => PathBuf::from(dir),
-        None => {
-            let dir = out_dir.join("aom-src");
-            if !dir.join("CMakeLists.txt").is_file() {
-                let _ = fs::remove_dir_all(&dir);
-                run_command(
-                    Command::new("git")
-                        .args([
-                            "clone",
-                            "--depth",
-                            "1",
-                            "--branch",
-                            WASM_AOM_VERSION,
-                            "https://aomedia.googlesource.com/aom",
-                        ])
-                        .arg(&dir),
-                );
-            }
-            dir
-        }
-    };
-    assert!(
-        src.join("CMakeLists.txt").is_file(),
-        "libaom sources not found at {}; set ULTRAHDR_AOM_SRC",
-        src.display()
-    );
-
-    let build = out_dir.join("aom-build");
-    let jobs = std::thread::available_parallelism()
-        .map_or(4, |jobs| jobs.get())
-        .to_string();
-    let toolchain = wasi_prefix.join("share/cmake/wasi-sdk-p1.cmake");
-    run_command(
-        Command::new("cmake")
-            .arg("-S")
-            .arg(&src)
-            .arg("-B")
-            .arg(&build)
-            .arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", toolchain.display()))
-            .arg(format!("-DWASI_SDK_PREFIX={}", wasi_prefix.display()))
-            .arg("-DCMAKE_BUILD_TYPE=Release")
-            // Portable C only: libaom's x86/AArch64 SIMD paths have no wasm equivalent.
-            .arg("-DAOM_TARGET_CPU=generic")
-            .arg("-DCONFIG_MULTITHREAD=0")
-            .arg("-DCONFIG_RUNTIME_CPU_DETECT=0")
-            .arg("-DCONFIG_AV1_ENCODER=1")
-            .arg("-DCONFIG_AV1_DECODER=1")
-            .arg("-DENABLE_TESTS=0")
-            .arg("-DENABLE_TOOLS=0")
-            .arg("-DENABLE_EXAMPLES=0")
-            .arg("-DENABLE_DOCS=0")
-            .arg("-DBUILD_SHARED_LIBS=0")
-            // wasi-sdk's <setjmp.h> refuses to compile unless the SJLJ emulation is enabled, and
-            // libaom uses setjmp/longjmp for its error recovery.
-            .arg("-DCMAKE_C_FLAGS=-mllvm -wasm-enable-sjlj")
-            .arg("-DCMAKE_CXX_FLAGS=-mllvm -wasm-enable-sjlj"),
-    );
-    run_command(
-        Command::new("cmake")
-            .arg("--build")
-            .arg(&build)
-            .arg("-j")
-            .arg(jobs)
-            .args(["--target", "aom"]),
-    );
-
-    // Lay out a prefix that looks like an installed libaom. libheif's FindAOM.cmake combines
-    // pkg-config with find_path/find_library, so a matching aom.pc is what makes
-    // CMAKE_PREFIX_PATH/PKG_CONFIG_LIBDIR prefer this copy over any host one.
-    fs::create_dir_all(&prefix).expect("failed to create the libaom prefix");
-    copy_dir_recursive(&src.join("aom"), &prefix.join("include/aom"))
-        .expect("failed to copy the libaom headers");
-    fs::create_dir_all(prefix.join("lib/pkgconfig")).expect("failed to create the libaom .pc dir");
-    fs::copy(build.join("libaom.a"), &archive).expect("failed to copy libaom.a");
-    fs::write(
-        &pkg_config,
-        format!(
-            "prefix={prefix}\n\
-             exec_prefix=${{prefix}}\n\
-             libdir=${{exec_prefix}}/lib\n\
-             includedir=${{prefix}}/include\n\
-             \n\
-             Name: aom\n\
-             Description: AV1 codec library (wasm32-wasip1)\n\
-             Version: {WASM_AOM_VERSION}\n\
-             Libs: -L${{libdir}} -laom\n\
-             Libs.private: -lm\n\
-             Cflags: -I${{includedir}}\n",
-            prefix = prefix.display()
-        ),
-    )
-    .expect("failed to write aom.pc");
-    prefix
-}
-
 fn wasi_toolchain() -> Option<(PathBuf, PathBuf)> {
     let target = env::var("TARGET").ok()?;
     if !target.contains("wasm32-wasi") {
@@ -368,84 +138,6 @@ fn apply_patch_once(src_dir: &Path, patch_path: &Path) {
     }
 }
 
-/// Codec libraries libheif would otherwise look for on the build host.
-const LIBHEIF_HOST_CODECS: [&str; 18] = [
-    "LIBDE265",
-    "X265",
-    "KVAZAAR",
-    "UVG266",
-    "VVDEC",
-    "VVENC",
-    "OpenH264_DECODER",
-    "DAV1D",
-    "AOM_DECODER",
-    "AOM_ENCODER",
-    "SvtEnc",
-    "RAV1E",
-    "JPEG_DECODER",
-    "JPEG_ENCODER",
-    "OpenJPEG_ENCODER",
-    "OpenJPEG_DECODER",
-    "FFMPEG_DECODER",
-    "OPENJPH_ENCODER",
-];
-
-/// Patch hunk that stops libheif from probing the **build host** for codec libraries when the
-/// target is WASI.
-///
-/// Beyond being the wrong architecture, the host include directories (`/usr/include` on a typical
-/// Linux host) leak into the cross compile and break it (`gnu/stubs-32.h` not found). `keep_aom`
-/// is set when the `heif` feature cross-compiles libaom into a prefix libheif can find, so the
-/// AOM entries stay enabled in that case. Native builds never read this hunk.
-fn libheif_wasi_codec_guard(keep_aom: bool) -> String {
-    let mut added = vec![
-        "# UltraHDR: when cross-compiling for WASI, never probe the build host for codec"
-            .to_owned(),
-        "# libraries: their include directories (e.g. /usr/include) and archives break the"
-            .to_owned(),
-        "# cross build, and a host library cannot be linked into a wasm module anyway.".to_owned(),
-        String::new(),
-        "if(CMAKE_SYSTEM_NAME STREQUAL \"WASI\")".to_owned(),
-    ];
-    for codec in LIBHEIF_HOST_CODECS {
-        if keep_aom && codec.starts_with("AOM") {
-            continue;
-        }
-        added.push(format!("  set(WITH_{codec} OFF CACHE BOOL \"\" FORCE)"));
-    }
-    added.push("endif()".to_owned());
-    added.push(String::new());
-
-    let context = [
-        "     unset(msg)",
-        " endmacro()",
-        " ",
-        " # libde265",
-        " ",
-        " plugin_option(LIBDE265 \"libde265 HEVC decoder\" ON OFF)",
-    ];
-    let mut hunk = String::from(
-        "diff --git a/CMakeLists.txt b/CMakeLists.txt\n\
-         --- a/CMakeLists.txt\n\
-         +++ b/CMakeLists.txt\n",
-    );
-    hunk.push_str(&format!(
-        "@@ -114,{} +114,{} @@\n",
-        context.len(),
-        context.len() + added.len()
-    ));
-    hunk.push_str(&context[..3].join("\n"));
-    hunk.push('\n');
-    for line in &added {
-        hunk.push('+');
-        hunk.push_str(line);
-        hunk.push('\n');
-    }
-    hunk.push_str(&context[3..].join("\n"));
-    hunk.push('\n');
-    hunk
-}
-
 fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
     if env::var("ULTRAHDR_SKIP_PATCHES").is_ok() {
         return;
@@ -454,92 +146,6 @@ fn apply_local_patches(manifest_dir: &Path, src_dir: &Path) {
         src_dir,
         &manifest_dir.join("patches/libultrahdr-no-threads.patch"),
     );
-    // libheif uses POSIX mkstemp(), which wasi-libc does not implement, so it
-    // fails to build for wasm32-wasip1. libheif is not present in the staged
-    // source here (the ExternalProject clones it *during* the CMake build), so
-    // instead of patching it directly we append the fix onto the existing
-    // cmake/patches/libheif_pr1503.patch, which the ExternalProject's
-    // PATCH_COMMAND git-applies to the cloned tree.
-    const MKSTEMP_FIX: &str = r#"
-diff --git a/libheif/box.cc b/libheif/box.cc
-index 3c8bdc86..dceb4c82 100644
---- a/libheif/box.cc
-+++ b/libheif/box.cc
-@@ -1506,7 +1506,12 @@ void Box_iloc::set_use_tmp_file(bool flag)
- {
-   m_use_tmpfile = flag;
-   if (flag) {
--#if !defined(_WIN32)
-+#if defined(__wasi__)
-+    // WASI has no mkstemp()/temp-file support in libc, so keep the item data in
-+    // memory instead of spilling it to a file.
-+    m_use_tmpfile = false;
-+    m_tmpfile_fd = -1;
-+#elif !defined(_WIN32)
-     strcpy(m_tmp_filename, "/tmp/libheif-XXXXXX");
-     m_tmpfile_fd = mkstemp(m_tmp_filename);
- #else
-diff --git a/libheif/pixelimage.cc b/libheif/pixelimage.cc
-index 04e81fe2..92be5bb9 100644
---- a/libheif/pixelimage.cc
-+++ b/libheif/pixelimage.cc
-@@ -275,23 +275,8 @@ Error HeifPixelImage::ImagePlane::alloc(uint32_t width, uint32_t height, heif_ch
-             sstr.str()};
-   }
- 
--  try {
--    allocated_mem = new uint8_t[static_cast<size_t>(m_mem_height) * stride + alignment - 1];
--    uint8_t* mem_8 = allocated_mem;
--
--    // shift beginning of image data to aligned memory position
--
--    auto mem_start_addr = (uint64_t) mem_8;
--    auto mem_start_offset = (mem_start_addr & (alignment - 1U));
--    if (mem_start_offset != 0) {
--      mem_8 += alignment - mem_start_offset;
--    }
--
--    mem = mem_8;
--
--    return Error::Ok;
--  }
--  catch (const std::bad_alloc& excpt) {
-+  allocated_mem = new (std::nothrow) uint8_t[static_cast<size_t>(m_mem_height) * stride + alignment - 1];
-+  if (allocated_mem == nullptr) {
-     std::stringstream sstr;
-     sstr << "Allocating " << static_cast<size_t>(m_mem_height) * stride + alignment - 1 << " bytes failed";
- 
-@@ -299,6 +284,19 @@ Error HeifPixelImage::ImagePlane::alloc(uint32_t width, uint32_t height, heif_ch
-             heif_suberror_Unspecified,
-             sstr.str()};
-   }
-+  uint8_t* mem_8 = allocated_mem;
-+
-+  // shift beginning of image data to aligned memory position
-+
-+  auto mem_start_addr = (uint64_t) mem_8;
-+  auto mem_start_offset = (mem_start_addr & (alignment - 1U));
-+  if (mem_start_offset != 0) {
-+    mem_8 += alignment - mem_start_offset;
-+  }
-+
-+  mem = mem_8;
-+
-+  return Error::Ok;
- }
- 
- 
-"#;
-    let heif_patch = src_dir.join("cmake/patches/libheif_pr1503.patch");
-    if heif_patch.is_file()
-        && let Ok(mut f) = fs::OpenOptions::new().append(true).open(&heif_patch)
-    {
-        use std::io::Write;
-        let _ = f.write_all(MKSTEMP_FIX.as_bytes());
-        let guard =
-            libheif_wasi_codec_guard(wasm_libaom_needed(&env::var("TARGET").unwrap_or_default()));
-        let _ = f.write_all(guard.as_bytes());
-    }
 }
 
 fn prepare_src_dir(manifest_dir: &Path, src_dir: &Path, out_dir: &Path) -> PathBuf {
@@ -606,7 +212,6 @@ fn main() {
     }
 
     let patch_path = manifest_dir.join("patches/libultrahdr-no-threads.patch");
-    let libheif_patch_path = source_dir.join("cmake/patches/libheif_pr1503.patch");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=ULTRAHDR_SKIP_PATCHES");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PREFIX");
@@ -621,7 +226,6 @@ fn main() {
         source_dir.join("CMakeLists.txt").display()
     );
     println!("cargo:rerun-if-changed={}", patch_path.display());
-    println!("cargo:rerun-if-changed={}", libheif_patch_path.display());
 
     let src_dir = prepare_src_dir(&manifest_dir, &source_dir, &out_dir);
 
@@ -648,75 +252,9 @@ fn main() {
     let is_wasm = is_wasm_target(&target);
     let wasi = wasi_toolchain();
 
-    // A wasm `heif` build cross-compiles libaom and points the nested libheif configure at it,
-    // because the WASI guard added above disables every host codec. HEVC has no WASI port, so the
-    // build provides AVIF only - say so rather than quietly shipping a codec-less libheif.
-    println!("cargo:rerun-if-env-changed=ULTRAHDR_AOM_SRC");
-    let wasm_aom = if wasm_libaom_needed(&target) {
-        let (_, wasi_prefix) = wasi
-            .as_ref()
-            .expect("a wasm `heif` build needs a wasi-sdk toolchain; set WASI_SDK_PREFIX");
-        let prefix = build_wasm_libaom(&out_dir, wasi_prefix);
-        let pc_dir = prefix.join("lib/pkgconfig");
-        // SAFETY: removing/adding process env vars is safe here; the build script does not spawn
-        // threads that race on them, and these only affect the CMake children spawned below.
-        unsafe {
-            // Make libheif find this libaom (CMAKE_PREFIX_PATH + its aom.pc) while hiding every
-            // host .pc file, whose include directories would leak into the cross build.
-            env::set_var("CMAKE_PREFIX_PATH", &prefix);
-            env::set_var("PKG_CONFIG_LIBDIR", &pc_dir);
-            env::set_var("PKG_CONFIG_PATH", &pc_dir);
-        }
-        println!(
-            "cargo:warning=`heif` on wasm32-wasip1 provides AVIF only: libaom (AV1) is \
-             cross-compiled, while HEVC (x265/libde265) has no WASI port. `--format heif` and \
-             `Codec::Heif` fail at runtime."
-        );
-        Some(prefix)
-    } else {
-        None
-    };
-
-    // On native targets libheif probes the host for codecs. A build that finds none is useless (it
-    // can only parse containers), which is what silently happens when the codec dev packages are
-    // missing, so report the codec set and fail when it is empty. Cross builds keep delegating to
-    // the CMake probe, and docs.rs has no codecs and only renders documentation.
-    for var in [
-        "PKG_CONFIG",
-        "PKG_CONFIG_PATH",
-        "PKG_CONFIG_LIBDIR",
-        "PKG_CONFIG_ALLOW_CROSS",
-        "DOCS_RS",
-    ] {
-        println!("cargo:rerun-if-env-changed={var}");
-    }
-    if cfg!(feature = "heif") && !is_wasm && env::var_os("DOCS_RS").is_none() {
-        if env::var("HOST").ok() == env::var("TARGET").ok() {
-            let found: Vec<&str> = HEIF_CODECS
-                .iter()
-                .filter(|(package, lib_name, _)| heif_codec_available(package, lib_name))
-                .map(|(_, _, label)| *label)
-                .collect();
-            if found.is_empty() {
-                build_error(
-                    "the `heif` feature needs at least one codec library, but none of libaom, \
-                     x265, libde265, dav1d, rav1e, SVT-AV1 or vvenc was found. Install one \
-                     (`libaom-dev` for AVIF, `libx265-dev` + `libde265-dev` for HEIC) or point \
-                     PKG_CONFIG_PATH (and CMAKE_PREFIX_PATH) at the prefix that provides it.",
-                );
-            }
-            println!("cargo:warning=heif codecs: {}", found.join(", "));
-        } else {
-            println!(
-                "cargo:warning=`heif` is cross-compiling: codec discovery is left to the libheif \
-                 CMake probe. Set PKG_CONFIG_ALLOW_CROSS=1, PKG_CONFIG_PATH and \
-                 CMAKE_PREFIX_PATH to point it at the target's codec libraries."
-            );
-        }
-    }
-
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release");
+
     // Shrink the wasm by size-optimizing + LTO the C++ side (libjpeg-turbo and
     // libultrahdr). The wasm link already uses `--gc-sections` to drop unreached
     // C++, but -Oz keeps the reachable code compact and -flto lets rust-lld run
@@ -791,25 +329,11 @@ fn main() {
     if cfg!(feature = "gles") {
         cfg.define("UHDR_ENABLE_GLES", "ON");
     }
-    // Control HEIF/AVIF container support via libheif. NOTE: upstream v2.0+
-    // defaults UHDR_ENABLE_HEIF to ON, so we must explicitly disable it unless
-    // the `heif` feature is requested; otherwise the default vendored build
-    // would fetch and build libheif as a dependency.
-    let heif = cfg!(feature = "heif");
-    cfg.define("UHDR_ENABLE_HEIF", if heif { "ON" } else { "OFF" });
-
-    // The vendored libheif is linked PRIVATE into libuhdr, so its codec libraries have to be
-    // added to every final link: the Rust executable and, with `shared`, libuhdr itself (which
-    // would otherwise be left with undefined `aom_*`/`x265_*` symbols and fail to load).
-    let heif_codec_flags = if heif && cfg!(feature = "vendored") && !is_wasm && target_env != "msvc"
-    {
-        libheif_codec_link_flags()
-    } else {
-        Vec::new()
-    };
-    if build_shared && !heif_codec_flags.is_empty() {
-        cfg.define("CMAKE_SHARED_LINKER_FLAGS", heif_codec_flags.join(" "));
-    }
+    // HEIF/HEIC and AVIF are deliberately unsupported: upstream's `UHDR_ENABLE_HEIF` pulls in
+    // libheif (LGPL-3.0), which cannot be statically linked into this crate's Apache-2.0 artifacts
+    // in a redistributable way. Upstream defaults the switch to ON, so it has to be turned off
+    // explicitly - leaving it alone would fetch and build libheif for every vendored build.
+    cfg.define("UHDR_ENABLE_HEIF", "OFF");
     // Control SMPTE ST 2094-50 (AGTM) dynamic metadata support. This is only
     // built when `vendored` is enabled upstream (FetchContent clones
     // webmproject/libsmpte2094-50 v0.1.4); with UHDR_BUILD_DEPS=OFF it is
@@ -893,54 +417,6 @@ fn main() {
         println!("cargo:rustc-link-lib=jpeg");
     }
 
-    // When HEIF/AVIF support is enabled, the upstream CMake builds libheif as a
-    // static ExternalProject (vendored) or links a system libheif (non-vendored).
-    // `uhdr`/`core` link it PRIVATE, so the final Rust executable must pull it in.
-    if cfg!(feature = "heif") {
-        if cfg!(feature = "vendored") {
-            // Bundled libheif static archive (non-multi build) lives at
-            // <dst>/build/libheif/src/libheif-build/libheif/libheif.a
-            println!(
-                "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif",
-                dst.display()
-            );
-            if target_env == "msvc" {
-                println!(
-                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Release",
-                    dst.display()
-                );
-                println!(
-                    "cargo:rustc-link-search=native={}/build/libheif/src/libheif-build/libheif/Debug",
-                    dst.display()
-                );
-            }
-            println!("cargo:rustc-link-lib=static=heif");
-        } else {
-            println!("cargo:rustc-link-lib=heif");
-        }
-        if is_wasm {
-            // A wasm `heif` build always links the cross-compiled libaom (AV1); without it the
-            // artifact would keep libheif container support only, i.e. no codecs at runtime.
-            if let Some(prefix) = &wasm_aom {
-                println!(
-                    "cargo:rustc-link-search=native={}",
-                    prefix.join("lib").display()
-                );
-                println!("cargo:rustc-link-lib=static=aom");
-            }
-        } else {
-            for flag in &heif_codec_flags {
-                if let Some(dir) = flag.strip_prefix("-L") {
-                    println!("cargo:rustc-link-search=native={dir}");
-                } else if let Some(lib) = flag.strip_prefix("-l") {
-                    println!("cargo:rustc-link-lib={lib}");
-                }
-            }
-        }
-    }
-
-    // SMPTE ST 2094-50 (AGTM) is provided by a FetchContent static library that
-    // `uhdr`/`core` link PRIVATE, so expose it to the final link too. The
     // FetchContent build only runs when `vendored` (UHDR_BUILD_DEPS=ON) is set;
     // without it upstream warns and disables SMPTE, so don't emit a bogus -l.
     if cfg!(feature = "smpte2094-50") && cfg!(feature = "vendored") {

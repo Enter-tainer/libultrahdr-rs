@@ -24,7 +24,8 @@ pub enum Error {
     /// Memory allocation failed (`UHDR_CODEC_MEM_ERROR`).
     Memory(String),
     /// The linked library was built without the requested feature
-    /// (`UHDR_CODEC_UNSUPPORTED_FEATURE`), e.g. HEIF output without the `heif` feature.
+    /// (`UHDR_CODEC_UNSUPPORTED_FEATURE`), e.g. an output format that is compiled out of the
+    /// linked build.
     UnsupportedFeature(String),
     /// Encode, decode or parse failure (`UHDR_CODEC_ERROR`).
     Codec(String),

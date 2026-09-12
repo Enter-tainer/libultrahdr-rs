@@ -27,16 +27,7 @@ vendored = []
 shared = []
 # Enable GLES in upstream build (links EGL/GLES).
 gles = []
-# Enable HEIF/HEIC & AVIF container support via libheif (needs `vendored` or a
-# system libheif with ISO 21496-1 gain-map API).
-#
-# libheif only provides the container plumbing; the codec set is provisioned per target and
-# reported at build time:
-#   * native: the host's codec libraries are used (libaom for AV1, x265/libde265 for HEVC). The
-#     build fails if none of them is present, instead of quietly shipping a codec-less libheif.
-#   * wasm32-wasip1: libaom is cross-compiled, because a host codec cannot be linked into a wasm
-#     module. AVIF works there; HEVC has no WASI port, so HEIC stays unavailable.
-heif = []
+
 # Enable SMPTE ST 2094-50 dynamic metadata (AGTM) support via libsmpte2094-50.
 smpte2094-50 = []
 # Enable writing ISO/TS 21496-1 gain map metadata.
