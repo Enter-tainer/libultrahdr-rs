@@ -4,8 +4,9 @@
 //! `data/plain.jpg`, a plain (non-UltraHDR) JPEG used for the negative cases.
 
 use ultrahdr::{
-    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, Decoder, Encoder,
-    Error, ImageLabel, Mirror, PixelFormat, RawImage, Rotation, is_uhdr_image,
+    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, CropRect,
+    DecodedImage, DecodedOutput, Decoder, Encoder, Error, ImageLabel, Mirror, PixelFormat,
+    ProbedDecoder, RawImage, Rotation, is_uhdr_image,
 };
 
 /// Fully specified Display P3 / PQ / full-range aspects, used by the HDR inputs.
@@ -115,6 +116,24 @@ fn set_stream(dec: &mut Decoder, bytes: &[u8]) {
         .expect("set decoder input");
 }
 
+/// A decoder with `stream` registered and probed.
+fn probed(stream: &[u8]) -> ProbedDecoder {
+    let mut dec = Decoder::new().expect("create decoder");
+    set_stream(&mut dec, stream);
+    dec.probe().expect("probe")
+}
+
+/// Decode `stream` into owned PQ RGBA1010102 pixels.
+fn decode_pq_owned(stream: &[u8]) -> DecodedImage {
+    let mut dec = Decoder::new().expect("create decoder");
+    set_stream(&mut dec, stream);
+    dec.probe_as(DecodedOutput::Pq1010102)
+        .expect("probe")
+        .decode()
+        .expect("decode")
+        .to_owned_image()
+}
+
 fn encode_configured<F>(hdr: &RawImage, sdr: Option<&RawImage>, configure: F) -> Vec<u8>
 where
     F: FnOnce(&mut Encoder) -> Result<(), Error>,
@@ -139,8 +158,7 @@ fn encode_hdr_only(width: u32, height: u32) -> Vec<u8> {
 }
 
 fn decode_dimensions(stream: &[u8]) -> (u32, u32) {
-    let mut dec = Decoder::new().expect("create decoder");
-    set_stream(&mut dec, stream);
+    let dec = probed(stream);
     (
         dec.image_width().expect("base width"),
         dec.image_height().expect("base height"),
@@ -166,27 +184,17 @@ fn encode_decode_exposes_metadata_and_compressed_parts() {
         is_uhdr_image(&stream),
         "baked stream must probe as UltraHDR"
     );
-    assert!(Decoder::is_uhdr_image(&stream));
 
     let mut dec = Decoder::new().expect("create decoder");
     dec.enable_gpu_acceleration(false).expect("toggle gpu");
     set_stream(&mut dec, &stream);
-    // The C context freezes once probed, so configure the output before probing.
-    dec.set_output_format(PixelFormat::Rgba1010102)
-        .expect("output format");
-    dec.set_output_transfer(ColorTransfer::Pq)
-        .expect("output transfer");
-    dec.probe().expect("probe");
+    // The C context freezes once probed, so configure the output before probing. Configuring
+    // afterwards is a compile error now: `set_output` lives on `Decoder`, the getters on
+    // `ProbedDecoder`.
+    dec.set_output(DecodedOutput::Pq1010102)
+        .expect("output profile");
 
-    let frozen = dec.set_output_format(PixelFormat::Rgba8888).unwrap_err();
-    assert!(
-        matches!(frozen, Error::InvalidOperation(_)),
-        "configuration must be rejected after probing, got {frozen:?}"
-    );
-    assert_eq!(
-        frozen.code(),
-        ultrahdr::sys::uhdr_codec_err_t::UHDR_CODEC_INVALID_OPERATION
-    );
+    let mut dec = dec.probe().expect("probe");
 
     let info = dec.info().expect("stream info");
     assert_eq!((info.width, info.height), (16, 16));
@@ -228,9 +236,7 @@ fn encode_decode_exposes_metadata_and_compressed_parts() {
     }
 
     {
-        let view = dec
-            .decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
-            .expect("decode");
+        let view = dec.decode().expect("decode");
         assert_eq!((view.width(), view.height()), (16, 16));
         assert_eq!(view.format(), PixelFormat::Rgba1010102);
         assert_eq!(view.row(0).expect("row 0").len(), 16 * 4);
@@ -243,6 +249,9 @@ fn encode_decode_exposes_metadata_and_compressed_parts() {
             view.row(3).expect("row 3"),
             &owned.data[3 * 16 * 4..4 * 16 * 4]
         );
+        // `rows` is infallible and yields exactly one slice per row.
+        assert_eq!(view.rows().count(), 16);
+        assert_eq!(view.rows().next(), Some(&owned.data[..16 * 4]));
     }
 
     let decoded_gainmap = dec
@@ -264,6 +273,52 @@ fn encode_decode_exposes_metadata_and_compressed_parts() {
 }
 
 #[test]
+fn probed_views_coexist_and_the_frame_pairs_image_with_gainmap() {
+    let stream = encode_hdr_only(16, 16);
+    let mut dec = {
+        let mut dec = Decoder::new().expect("create decoder");
+        set_stream(&mut dec, &stream);
+        dec.probe_as(DecodedOutput::Pq1010102)
+            .expect("probe with a PQ output profile")
+    };
+
+    // The `&self` getters lend several views at once; each call used to require `&mut self`.
+    let info = dec.info().expect("stream info");
+    {
+        let base = dec
+            .base_image()
+            .expect("base image query")
+            .expect("base image");
+        let gainmap = dec
+            .gainmap_image()
+            .expect("gain map image query")
+            .expect("gain map image");
+        let exif = dec.exif().expect("exif query");
+        assert_eq!(&base.bytes()[..2], &[0xFF, 0xD8]);
+        assert!(!gainmap.is_empty());
+        assert!(exif.is_none());
+    }
+
+    // `decode_with_gainmap` lends the decoded image and the decoded gain map together.
+    let frame = dec.decode_with_gainmap().expect("decode with gainmap");
+    assert_eq!((frame.image.width(), frame.image.height()), (16, 16));
+    assert_eq!(frame.image.format(), PixelFormat::Rgba1010102);
+    let frame_gainmap = frame.gainmap.as_ref().expect("decoded gain map");
+    assert_eq!(
+        (frame_gainmap.width(), frame_gainmap.height()),
+        info.gainmap_size.expect("gain map size")
+    );
+    let bpp = frame_gainmap
+        .format()
+        .bytes_per_pixel()
+        .expect("packed gain map format");
+    assert_eq!(
+        frame_gainmap.row(0).expect("gain map row").len(),
+        frame_gainmap.width() as usize * bpp
+    );
+}
+
+#[test]
 fn plain_jpeg_is_not_reported_as_uhdr() {
     assert!(!is_uhdr_image(PLAIN_JPEG));
     assert!(!is_uhdr_image(b"not a jpeg at all"));
@@ -278,9 +333,8 @@ fn plain_jpeg_is_not_reported_as_uhdr() {
         matches!(err, Error::InvalidParameter(_)),
         "unexpected error: {err:?}"
     );
-    assert!(dec.image_width().is_err());
-    assert!(dec.gainmap_image().is_err());
-    assert!(dec.gainmap_metadata().is_err());
+    // A failed probe drops the decoder; there is no zombie state left to query. Creating a
+    // new decoder is the way to try another stream.
 }
 
 #[test]
@@ -297,8 +351,7 @@ fn exif_data_round_trips_through_encode_and_decode() {
     let stream = encode_configured(&hdr_image(16, 16), None, |enc| enc.set_exif_data(EXIF));
     assert!(is_uhdr_image(&stream));
 
-    let mut dec = Decoder::new().expect("create decoder");
-    set_stream(&mut dec, &stream);
+    let dec = probed(&stream);
     let exif = dec
         .exif()
         .expect("exif query")
@@ -312,8 +365,8 @@ fn precomputed_gainmap_can_be_reencoded() {
     let stream = encode_hdr_only(16, 16);
 
     let (base, gainmap, meta) = {
-        let mut dec = Decoder::new().expect("create decoder");
-        set_stream(&mut dec, &stream);
+        // All three parts are borrowed from the same probed decoder at once.
+        let dec = probed(&stream);
         let meta = dec
             .gainmap_metadata()
             .expect("metadata query")
@@ -321,14 +374,12 @@ fn precomputed_gainmap_can_be_reencoded() {
         let base = dec
             .base_image()
             .expect("base image query")
-            .expect("base image")
-            .to_vec();
+            .expect("base image");
         let gainmap = dec
             .gainmap_image()
             .expect("gain map image query")
-            .expect("gain map image")
-            .to_vec();
-        (base, gainmap, meta)
+            .expect("gain map image");
+        (base.to_vec(), gainmap.to_vec(), meta)
     };
 
     let mut enc = Encoder::new().expect("create encoder");
@@ -345,8 +396,7 @@ fn precomputed_gainmap_can_be_reencoded() {
         .data;
 
     assert!(is_uhdr_image(&out));
-    let mut dec = Decoder::new().expect("create decoder");
-    set_stream(&mut dec, &out);
+    let dec = probed(&out);
     assert_eq!(decode_dimensions(&out), (16, 16));
     let roundtripped = dec
         .gainmap_metadata()
@@ -364,8 +414,10 @@ fn encoder_effects_reshape_the_output() {
     let resized = encode_configured(&hdr_image(16, 16), None, |enc| enc.resize(8, 8));
     assert_eq!(decode_dimensions(&resized), (8, 8));
 
-    // crop takes exclusive right/bottom coordinates.
-    let cropped = encode_configured(&hdr_image(16, 16), None, |enc| enc.crop(2, 10, 3, 11));
+    // crop takes a rectangle in exclusive coordinates.
+    let cropped = encode_configured(&hdr_image(16, 16), None, |enc| {
+        enc.crop(CropRect::new(2, 3, 10, 11))
+    });
     assert_eq!(decode_dimensions(&cropped), (8, 8));
 
     // A 90 degree rotation swaps the stored dimensions.
@@ -374,16 +426,23 @@ fn encoder_effects_reshape_the_output() {
 }
 
 #[test]
+fn empty_crop_rectangles_are_rejected_eagerly() {
+    let mut enc = Encoder::new().expect("create encoder");
+    let rejected = enc
+        .crop(CropRect::new(4, 0, 4, 8))
+        .expect_err("empty rectangle must be rejected");
+    assert!(matches!(rejected, Error::InvalidParameter(_)));
+    let inverted = enc
+        .crop(CropRect::new(5, 0, 4, 8))
+        .expect_err("inverted rectangle must be rejected");
+    assert!(matches!(inverted, Error::InvalidParameter(_)));
+}
+
+#[test]
 fn decoder_effects_transform_the_decoded_pixels() {
     let stream = encode_hdr_only(8, 8);
 
-    let reference = {
-        let mut dec = Decoder::new().expect("create decoder");
-        set_stream(&mut dec, &stream);
-        dec.decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
-            .expect("decode")
-            .to_owned_image()
-    };
+    let reference = decode_pq_owned(&stream);
     assert_eq!((reference.width, reference.height), (8, 8));
     let row = reference.width as usize * 4;
 
@@ -392,7 +451,9 @@ fn decoder_effects_transform_the_decoded_pixels() {
         let mut dec = Decoder::new().expect("create decoder");
         set_stream(&mut dec, &stream);
         dec.mirror(Mirror::Vertical).expect("add mirror effect");
-        dec.decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
+        dec.probe_as(DecodedOutput::Pq1010102)
+            .expect("probe")
+            .decode()
             .expect("decode")
             .to_owned_image()
     };
@@ -410,8 +471,11 @@ fn decoder_effects_transform_the_decoded_pixels() {
     let cropped = {
         let mut dec = Decoder::new().expect("create decoder");
         set_stream(&mut dec, &stream);
-        dec.crop(2, 6, 1, 5).expect("add crop effect");
-        dec.decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
+        dec.crop(CropRect::new(2, 1, 6, 5))
+            .expect("add crop effect");
+        dec.probe_as(DecodedOutput::Pq1010102)
+            .expect("probe")
+            .decode()
             .expect("decode")
             .to_owned_image()
     };
@@ -432,11 +496,30 @@ fn decoder_effects_transform_the_decoded_pixels() {
         let mut dec = Decoder::new().expect("create decoder");
         set_stream(&mut dec, &wide);
         dec.rotate(Rotation::Deg90).expect("add rotate effect");
-        dec.decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
+        dec.probe_as(DecodedOutput::Pq1010102)
+            .expect("probe")
+            .decode()
             .expect("decode")
             .to_owned_image()
     };
     assert_eq!((rotated.width, rotated.height), (8, 16));
+}
+
+#[test]
+fn decoder_effects_can_be_added_after_probing() {
+    // libultrahdr locks effects when the codec runs, not when it is probed: a crop can be
+    // decided after the stream information is known.
+    let stream = encode_hdr_only(16, 16);
+    let mut dec = probed(&stream);
+    assert_eq!(
+        (dec.image_width().unwrap(), dec.image_height().unwrap()),
+        (16, 16)
+    );
+
+    dec.crop(CropRect::new(4, 4, 12, 12))
+        .expect("crop after probe");
+    let cropped = dec.decode().expect("decode").to_owned_image();
+    assert_eq!((cropped.width, cropped.height), (8, 8));
 }
 
 #[test]
@@ -446,23 +529,38 @@ fn decoder_reset_allows_reuse() {
 
     let mut dec = Decoder::new().expect("create decoder");
     set_stream(&mut dec, &first);
-    assert_eq!(decode_dimensions(&first), (16, 16));
+    let mut dec = dec.probe_as(DecodedOutput::Pq1010102).expect("probe");
+    {
+        let view = dec.decode().expect("decode");
+        assert_eq!((view.width(), view.height()), (16, 16));
+    }
 
-    dec.reset();
-    assert!(
-        dec.image_width().is_err(),
-        "reset must clear the previously probed image"
-    );
-    assert!(
-        matches!(dec.decode().unwrap_err(), Error::InvalidOperation(_)),
-        "a reset decoder has no image to decode"
-    );
-
+    // reset() consumes the probed decoder and returns a configurable one, which accepts a new
+    // image and can be probed again.
+    let mut dec = dec.reset();
     set_stream(&mut dec, &second);
-    let view = dec
-        .decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
-        .expect("decode after reset");
+    let mut dec = dec
+        .probe_as(DecodedOutput::Pq1010102)
+        .expect("probe after reset");
+    let view = dec.decode().expect("decode after reset");
     assert_eq!((view.width(), view.height()), (16, 16));
+
+    // A decoder rejects an empty stream eagerly: the dangling pointer of an empty buffer would
+    // otherwise crash the C parser.
+    let mut empty = Decoder::new().expect("create decoder");
+    let empty_stream = empty
+        .set_image(&CompressedImage::new(Vec::new()))
+        .expect_err("an empty stream must be rejected");
+    assert!(
+        matches!(empty_stream, Error::InvalidParameter(_)),
+        "unexpected error: {empty_stream:?}"
+    );
+    let unconfigured = Decoder::new().expect("create decoder");
+    let no_image = unconfigured.probe().expect_err("no image was registered");
+    assert!(
+        matches!(no_image, Error::InvalidOperation(_)),
+        "unexpected error: {no_image:?}"
+    );
 }
 
 #[test]
@@ -472,7 +570,9 @@ fn decoded_pixels_can_be_reencoded() {
     let mut dec = Decoder::new().expect("create decoder");
     set_stream(&mut dec, &stream);
     let mut decoded = dec
-        .decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)
+        .probe_as(DecodedOutput::Pq1010102)
+        .expect("probe")
+        .decode()
         .expect("decode")
         .to_owned_image();
     // The stream does not signal every aspect; the encoder needs them for raw input.
@@ -575,8 +675,7 @@ fn min_max_content_boost_is_validated_and_applied() {
         enc.set_min_max_content_boost(1.0, 4.0)
     });
 
-    let mut dec = Decoder::new().expect("create decoder");
-    set_stream(&mut dec, &stream);
+    let dec = probed(&stream);
     let meta = dec
         .gainmap_metadata()
         .expect("metadata query")
@@ -591,6 +690,39 @@ fn quality_out_of_range_is_rejected() {
     let err = enc.set_quality(ImageLabel::Hdr, 101).unwrap_err();
     assert!(matches!(err, Error::InvalidParameter(_)), "{err:?}");
     enc.set_quality(ImageLabel::Hdr, 100).expect("quality 100");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Thread safety
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn codecs_and_views_are_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Encoder>();
+    assert_send::<Decoder>();
+    assert_send::<ProbedDecoder>();
+    assert_send::<DecodedImage>();
+    assert_send::<ultrahdr::EncodedView<'static>>();
+    assert_send::<ultrahdr::DecodedView<'static>>();
+    assert_send::<ultrahdr::DecodedFrame<'static>>();
+    assert_send::<ultrahdr::MemBlockView<'static>>();
+}
+
+#[test]
+fn decoders_can_move_to_another_thread() {
+    let stream = encode_hdr_only(16, 16);
+    let mut dec = Decoder::new().expect("create decoder");
+    set_stream(&mut dec, &stream);
+    let mut dec = dec.probe_as(DecodedOutput::Pq1010102).expect("probe");
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let view = dec.decode().expect("decode in worker thread");
+            assert_eq!((view.width(), view.height()), (16, 16));
+            view.to_owned_image()
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------------------------

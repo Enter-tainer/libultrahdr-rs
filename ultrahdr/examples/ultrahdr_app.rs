@@ -4,8 +4,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use ultrahdr::{
-    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, Decoder, Encoder,
-    ImageLabel, PixelFormat, Preset, RawImage,
+    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, DecodedOutput,
+    Decoder, Encoder, ImageLabel, PixelFormat, Preset, RawImage,
 };
 
 #[derive(Debug, Parser)]
@@ -58,12 +58,9 @@ enum Command {
         /// Output raw file
         #[arg(long)]
         out_raw: PathBuf,
-        /// Output format
-        #[arg(long, value_enum, default_value = "rgba1010102")]
-        fmt: RawFmt,
-        /// Output transfer
-        #[arg(long, value_enum, default_value = "pq")]
-        transfer: Transfer,
+        /// Output profile (pixel format + transfer function)
+        #[arg(long, value_enum, default_value = "pq-1010102")]
+        output: OutputProfile,
     },
 }
 
@@ -98,19 +95,22 @@ impl RawFmt {
     }
 }
 
+/// The four output profiles the decoder accepts, as CLI values.
 #[derive(Debug, Clone, ValueEnum)]
-enum Transfer {
-    Pq,
-    Hlg,
-    Srgb,
+enum OutputProfile {
+    LinearF16,
+    Pq1010102,
+    Hlg1010102,
+    Srgb8888,
 }
 
-impl Transfer {
-    fn to_color_transfer(&self) -> ColorTransfer {
+impl OutputProfile {
+    fn to_decoded_output(&self) -> DecodedOutput {
         match self {
-            Transfer::Pq => ColorTransfer::Pq,
-            Transfer::Hlg => ColorTransfer::Hlg,
-            Transfer::Srgb => ColorTransfer::Srgb,
+            OutputProfile::LinearF16 => DecodedOutput::LinearF16,
+            OutputProfile::Pq1010102 => DecodedOutput::Pq1010102,
+            OutputProfile::Hlg1010102 => DecodedOutput::Hlg1010102,
+            OutputProfile::Srgb8888 => DecodedOutput::Srgb8888,
         }
     }
 }
@@ -144,9 +144,8 @@ fn main() -> Result<()> {
         Command::Decode {
             uhdr,
             out_raw,
-            fmt,
-            transfer,
-        } => decode(uhdr, out_raw, fmt, transfer),
+            output,
+        } => decode(uhdr, out_raw, output),
     }
 }
 
@@ -202,34 +201,29 @@ fn encode(args: EncodeArgs) -> Result<()> {
     Ok(())
 }
 
-fn decode(
-    uhdr_path: PathBuf,
-    out_raw_path: PathBuf,
-    fmt: RawFmt,
-    transfer: Transfer,
-) -> Result<()> {
+fn decode(uhdr_path: PathBuf, out_raw_path: PathBuf, output: OutputProfile) -> Result<()> {
     let uhdr_bytes =
         fs::read(&uhdr_path).with_context(|| format!("Failed to read {}", uhdr_path.display()))?;
+    let output = output.to_decoded_output();
+
     let mut dec = Decoder::new()?;
     dec.set_image(&CompressedImage::new(uhdr_bytes))?;
+    let mut dec = dec.probe_as(output)?;
 
-    let img_fmt = fmt.to_pixel_format();
-    let color_transfer = transfer.to_color_transfer();
-    let decoded = dec.decode_as(img_fmt, color_transfer)?;
+    let decoded = dec.decode()?;
     let mut file = File::create(&out_raw_path)
         .with_context(|| format!("Failed to write {}", out_raw_path.display()))?;
     for row in decoded.rows() {
-        file.write_all(row?)
+        file.write_all(row)
             .with_context(|| format!("Failed to write {}", out_raw_path.display()))?;
     }
     println!(
-        "Decoded {} -> {} ({}x{}, {:?} {:?})",
+        "Decoded {} -> {} ({}x{}, {:?})",
         uhdr_path.display(),
         out_raw_path.display(),
         decoded.width(),
         decoded.height(),
-        img_fmt,
-        color_transfer
+        output,
     );
     Ok(())
 }

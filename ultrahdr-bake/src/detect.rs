@@ -173,14 +173,13 @@ fn detect_hdr_candidate(path: &Path) -> Result<Option<HdrDetection>> {
 pub fn probe_gainmap_metadata(buf: &[u8]) -> Result<Option<GainMapMetadata>> {
     let mut dec = Decoder::new()?;
     dec.set_image(&CompressedImage::new(buf))?;
-    match dec.gainmap_metadata() {
-        Ok(meta) => Ok(meta),
-        Err(Error::InvalidParameter(_)) => {
-            // Not an UltraHDR/gain map JPEG.
-            Ok(None)
-        }
-        Err(e) => Err(e.into()),
-    }
+    let dec = match dec.probe() {
+        Ok(dec) => dec,
+        // Not an UltraHDR/gain map JPEG.
+        Err(Error::InvalidParameter(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    dec.gainmap_metadata().map_err(Into::into)
 }
 
 fn original_document_id(path: &Path) -> Result<Option<String>> {

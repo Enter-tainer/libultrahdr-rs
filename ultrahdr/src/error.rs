@@ -18,8 +18,9 @@ pub enum Error {
     /// A caller-supplied parameter was rejected (`UHDR_CODEC_INVALID_PARAM`).
     InvalidParameter(String),
     /// The codec is not in a state that allows the operation
-    /// (`UHDR_CODEC_INVALID_OPERATION`) — for example configuring a decoder after it has been
-    /// probed, or reusing an encoder without calling [`Encoder::reset`](crate::Encoder::reset).
+    /// (`UHDR_CODEC_INVALID_OPERATION`) — for example probing a decoder before an image was
+    /// registered, adding an effect after the codec ran, or reusing an encoder without calling
+    /// [`Encoder::reset`](crate::Encoder::reset).
     InvalidOperation(String),
     /// Memory allocation failed (`UHDR_CODEC_MEM_ERROR`).
     Memory(String),

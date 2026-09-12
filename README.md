@@ -75,16 +75,15 @@ Browser demo: deploys under root by default; GitHub Pages build sets `VITE_BASE_
 ## Library usage / 库用法示例
 ```rust
 use ultrahdr::{
-    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, Decoder, Encoder,
-    ImageLabel, PixelFormat,
+    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, DecodedOutput,
+    Decoder, Encoder, ImageLabel,
 };
 
 fn round_trip(jpeg: &[u8]) -> ultrahdr::Result<()> {
     // Decode an UltraHDR JPEG into PQ RGBA1010102 pixels.
     let mut dec = Decoder::new()?;
     dec.set_image(&CompressedImage::new(jpeg))?;
-    dec.set_output_format(PixelFormat::Rgba1010102)?;
-    dec.set_output_transfer(ColorTransfer::Pq)?;
+    let mut dec = dec.probe_as(DecodedOutput::Pq1010102)?;  // freeze the configuration
 
     let info = dec.info()?;                       // dimensions + gain map metadata
     let decoded = dec.decode()?.to_owned_image();
@@ -114,17 +113,29 @@ The safe wrapper exposes the full `ultrahdr_api.h` surface, with owning image ty
 instead of the C constants; `ultrahdr::sys` re-exports the raw bindings for anything not covered. /
 安全封装覆盖 `ultrahdr_api.h` 的全部接口：图像类型拥有自己的数据（无生命周期），C 常量换成 Rust 枚举，`ultrahdr::sys` 保留原始绑定。
 
-- Detect: `is_uhdr_image`, `Decoder::{probe, is_uhdr_image}`.
-- Stream info: `Decoder::info` (`ImageInfo`) plus `Decoder::{image_width, image_height, gainmap_width, gainmap_height, gainmap_metadata}`.
-- Embedded data: `Decoder::{exif, icc, base_image, gainmap_image}` returning `MemBlockView`.
+- Detect: `is_uhdr_image`.
+- Decoder configuration: `Decoder::{set_image, set_output, set_max_display_boost, enable_gpu_acceleration, mirror, rotate, crop, resize, probe, probe_as}`.
+- Stream info (on the `ProbedDecoder` returned by `probe`): `ProbedDecoder::info` (`ImageInfo`) plus
+  `ProbedDecoder::{image_width, image_height, gainmap_width, gainmap_height, gainmap_metadata}`.
+- Embedded data: `ProbedDecoder::{exif, icc, base_image, gainmap_image}` returning `MemBlockView`.
+- Decode output: `ProbedDecoder::{decode, decode_with_gainmap, decoded_gainmap}`.
 - Encode inputs: `Encoder::{set_raw_image, set_decoded_image, set_compressed_image, set_gainmap_image, set_exif_data}`.
 - Encode tuning: `Encoder::{set_quality, set_gainmap_scale_factor, set_multi_channel_gainmap, set_gainmap_gamma, set_min_max_content_boost, set_target_display_peak_brightness, set_preset, set_output_format}`.
-- Decode output: `Decoder::{set_output_format, set_output_transfer, set_max_display_boost, decode, decode_as, decoded_gainmap}`.
 - Shared: `enable_gpu_acceleration`, `mirror`/`rotate`/`crop`/`resize`, `reset`, `LIB_VERSION` / `version_string()`.
 - Pixel buffers: `RawImage::{new, from_packed, from_planes, yuv420, p010}` (owning, packed or planar) and `DecodedImage::into_raw_image` for zero-copy re-encode.
 
-**Ordering caveat.** libultrahdr freezes a decoder as soon as it is probed: output settings and the input image can no longer change until `reset()`. Configure `set_output_format` / `set_output_transfer` before calling an info getter (they probe on demand); `decode_as` skips redundant setters, so the ordering above works. /
-**顺序注意。** 解码器一旦 `probe` 就会锁定配置，必须先用 `set_output_*` 设定输出，再调用信息 getter 或解码；`reset()` 后才能重新配置。
+**Decoder lifecycle.** The decode side is split by type: a `Decoder` is configurable, and
+`probe()`/`probe_as()` consume it and return a `ProbedDecoder` with the configuration frozen —
+configuring afterwards is a compile error, not a runtime one. The `ProbedDecoder` getters take
+`&self`, so the EXIF/ICC/base/gain-map views coexist; `decode_with_gainmap` lends the decoded image
+and gain map together. `reset()` turns a `ProbedDecoder` back into a reusable `Decoder`. Output
+profiles are the four valid format+transfer pairings, enumerated by `DecodedOutput`. /
+解码侧按类型划分：`Decoder` 可配置，`probe()` 消耗它并返回配置已冻结的 `ProbedDecoder`——之后再配置是编译错误而非运行时错误。`ProbedDecoder` 的 getter 只需 `&self`，EXIF/ICC/主图/gain map 视图可同时持有；`decode_with_gainmap` 同时借出解码图像和 gain map。`reset()` 把 `ProbedDecoder` 变回可复用的 `Decoder`。输出配置是 `DecodedOutput` 枚举的四种合法“格式+传递函数”组合。
+
+**Thread safety / 线程安全。** `Encoder`, `Decoder`, `ProbedDecoder` and the views they lend are
+`Send` (the C++ objects keep no thread-local state), so a codec can be moved to another thread.
+They are deliberately not `Sync`: the C API has no internal synchronization, so share via a `Mutex`. /
+`Encoder`、`Decoder`、`ProbedDecoder` 及其借出的视图都是 `Send`（C++ 对象无线程局部状态），可以跨线程移动；但故意不实现 `Sync`：C API 没有内部同步，跨线程共享需要 `Mutex`。
 
 ## Features / 可选特性
 - `vendored` (default): build libjpeg-turbo and other deps from source. / `vendored`（默认）：从源码构建 libjpeg-turbo 等依赖。

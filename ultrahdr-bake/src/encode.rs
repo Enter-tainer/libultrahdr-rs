@@ -2,8 +2,8 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use ultrahdr::{
-    ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, Decoder, Encoder,
-    ImageLabel, PixelFormat, Preset,
+    ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, DecodedOutput, Decoder,
+    Encoder, ImageLabel, Preset,
 };
 
 use crate::color::{detect_icc_color_gamut, gamut_label};
@@ -42,7 +42,8 @@ pub fn run_encoding(
         hdr_bytes.as_slice(),
         ColorAspects::UNSPECIFIED.with_gamut(hdr_icc_gamut.unwrap_or(ColorGamut::DisplayP3)),
     ))?;
-    let mut hdr_view = dec.decode_as(PixelFormat::Rgba1010102, ColorTransfer::Pq)?;
+    let mut dec = dec.probe_as(DecodedOutput::Pq1010102)?;
+    let mut hdr_view = dec.decode()?;
 
     // Fill in anything the stream did not signal; the encoder needs complete aspects for raw input.
     let mut aspects = hdr_view.aspects();

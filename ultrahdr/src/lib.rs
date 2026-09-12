@@ -9,12 +9,22 @@
 //!
 //! - [`Encoder`] turns raw or compressed input images into an UltraHDR stream. Inputs are copied,
 //!   so [`image::RawImage`] and [`image::CompressedImage`] have no lifetimes.
-//! - [`Decoder`] probes a stream for its size, gain map metadata and embedded EXIF/ICC blocks, then
-//!   decodes it into packed pixels. A decoder is one-shot: it may be configured until it is probed,
-//!   and its configuration is frozen afterwards until [`Decoder::reset`].
-//! - [`image`] holds the pixel formats, colour descriptions and image descriptors.
-//! - [`gainmap`] holds [`GainMapMetadata`], [`edit`] holds the [`Mirror`] and [`Rotation`] effects
-//!   shared by both directions, and [`error`] holds [`Error`] and [`Result`].
+//! - [`Decoder`] is the configurable half of the decode side: it accepts an image and output
+//!   settings until [`Decoder::probe`] consumes it and returns a [`ProbedDecoder`]. The probed
+//!   decoder exposes the parsed stream information through `&self` getters (several views can be
+//!   held at once) and decodes pixels through `&mut self`. [`ProbedDecoder::reset`] returns a
+//!   reusable [`Decoder`]. The probe state cannot be violated at runtime, only by the types.
+//! - [`image`] holds the pixel formats, colour descriptions and image descriptors, including
+//!   [`image::DecodedOutput`], the paired output profiles the decoder accepts.
+//! - [`gainmap`] holds [`GainMapMetadata`], [`edit`] holds the [`Mirror`], [`Rotation`], and
+//!   [`CropRect`] effects shared by both directions, and [`error`] holds [`Error`] and [`Result`].
+//!
+//! # Thread safety
+//!
+//! [`Encoder`], [`Decoder`], [`ProbedDecoder`] and the views they lend are [`Send`]: the
+//! underlying C++ objects are self-contained and keep no thread-local state, so a codec can be
+//! moved to another thread and used there. They are deliberately **not** [`Sync`]: the C API has
+//! no internal synchronization, so a codec shared across threads must be wrapped in a `Mutex`.
 //!
 //! # Quick start
 //!
@@ -46,7 +56,7 @@
 //! Decoding a stream back to linear-float pixels while preserving its metadata:
 //!
 //! ```no_run
-//! use ultrahdr::{ColorTransfer, CompressedImage, Decoder, PixelFormat};
+//! use ultrahdr::{CompressedImage, DecodedOutput, Decoder};
 //!
 //! # fn main() -> ultrahdr::Result<()> {
 //! # let bytes: Vec<u8> = Vec::new();
@@ -54,9 +64,9 @@
 //!
 //! let mut dec = Decoder::new()?;
 //! dec.set_image(&CompressedImage::new(bytes.as_slice()))?;
-//! dec.set_output_format(PixelFormat::Rgba1010102)?;
-//! dec.set_output_transfer(ColorTransfer::Pq)?;
+//! dec.set_output(DecodedOutput::LinearF16)?;
 //!
+//! let mut dec = dec.probe()?;
 //! let info = dec.info()?;
 //! let pixels = dec.decode()?;
 //! println!("{}x{} -> {} bytes", info.width, info.height, pixels.to_owned_image().data.len());
@@ -81,15 +91,15 @@ pub mod error;
 pub mod gainmap;
 pub mod image;
 
-pub use decoder::{Decoder, ImageInfo, is_uhdr_image};
-pub use edit::{Mirror, Rotation};
+pub use decoder::{Decoder, ImageInfo, ProbedDecoder, is_uhdr_image};
+pub use edit::{CropRect, Mirror, Rotation};
 pub use encoder::Encoder;
 pub use error::{Error, Result};
 pub use gainmap::{GainMapMetadata, SDR_WHITE_NITS};
 pub use image::{
-    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, DecodedImage,
-    DecodedView, EncodedImage, EncodedView, ImageLabel, MemBlockView, PixelFormat, Plane, Preset,
-    RawImage,
+    Codec, ColorAspects, ColorGamut, ColorRange, ColorTransfer, CompressedImage, DecodedFrame,
+    DecodedImage, DecodedOutput, DecodedView, EncodedImage, EncodedView, ImageLabel, MemBlockView,
+    PixelFormat, Plane, Preset, RawImage,
 };
 
 /// Raw FFI bindings, re-exported for cases the safe layer does not cover.
@@ -158,5 +168,6 @@ mod tests {
             sys::uhdr_mirror_direction_t::UHDR_MIRROR_HORIZONTAL
         );
         assert_eq!(Rotation::Deg270.degrees(), 270);
+        assert_eq!(DecodedOutput::Pq1010102.format(), PixelFormat::Rgba1010102);
     }
 }

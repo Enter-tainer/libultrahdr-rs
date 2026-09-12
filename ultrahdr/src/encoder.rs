@@ -22,7 +22,7 @@
 
 use crate::GainMapMetadata;
 use crate::edit;
-use crate::edit::{Mirror, Rotation};
+use crate::edit::{CropRect, Mirror, Rotation};
 use crate::error::{Error, Result, check};
 use crate::image::{
     Codec, CompressedImage, DecodedView, EncodedView, ImageLabel, Preset, RawImage,
@@ -39,6 +39,13 @@ pub struct Encoder {
     /// Mirrored output format, reset by [`reset`](Self::reset).
     output_format: Codec,
 }
+
+// SAFETY: a libultrahdr encoder is a self-contained C++ object: it keeps no thread-local state and
+// registers nothing per-thread (verified against the upstream sources, which contain no
+// `thread_local`/`__thread`/`pthread_key` usage). Moving the handle to another thread and using
+// it exclusively there is therefore sound. `Sync` is deliberately NOT implemented: the C API has
+// no internal synchronization, so concurrent calls through a shared reference would race.
+unsafe impl Send for Encoder {}
 
 impl Encoder {
     /// Create a new encoder instance.
@@ -76,12 +83,18 @@ impl Encoder {
     /// With [`ImageLabel::Hdr`]/[`ImageLabel::Sdr`] the compressed image is decoded and a gain map
     /// is computed from it. With [`ImageLabel::Base`]/[`ImageLabel::GainMap`] the stream is taken
     /// as-is (or transcoded) and combined with the metadata passed to
-    /// [`set_gainmap_image`](Self::set_gainmap_image).
+    /// [`set_gainmap_image`](Self::set_gainmap_image). An empty stream is rejected eagerly: its
+    /// dangling data pointer would pass the C null check and crash the parser.
     pub fn set_compressed_image(
         &mut self,
         label: ImageLabel,
         image: &CompressedImage,
     ) -> Result<()> {
+        if image.is_empty() {
+            return Err(Error::invalid_parameter(
+                "compressed image holds no bytes; a JPEG stream is required",
+            ));
+        }
         let mut raw = image.as_sys();
         // SAFETY: the library copies the stream during the call.
         check(unsafe {
@@ -94,12 +107,18 @@ impl Encoder {
     ///
     /// Requires the base image to have been registered as a compressed image with
     /// [`ImageLabel::Base`]. The metadata is used verbatim: settings such as
-    /// [`set_gainmap_gamma`](Self::set_gainmap_gamma) do not affect it.
+    /// [`set_gainmap_gamma`](Self::set_gainmap_gamma) do not affect it. An empty stream is
+    /// rejected eagerly, as in [`set_compressed_image`](Self::set_compressed_image).
     pub fn set_gainmap_image(
         &mut self,
         image: &CompressedImage,
         metadata: &GainMapMetadata,
     ) -> Result<()> {
+        if image.is_empty() {
+            return Err(Error::invalid_parameter(
+                "compressed image holds no bytes; a JPEG stream is required",
+            ));
+        }
         let mut raw = image.as_sys();
         let mut metadata = sys::uhdr_gainmap_metadata::from(metadata);
         // SAFETY: both descriptors are read (and copied) during the call.
@@ -230,12 +249,12 @@ impl Encoder {
     /// Crop the input images before encoding, given absolute, exclusive pixel coordinates.
     ///
     /// The output is `(right - left)` × `(bottom - top)` pixels.
-    pub fn crop(&mut self, left: i32, right: i32, top: i32, bottom: i32) -> Result<()> {
-        edit::add_effect_crop(self.raw, left, right, top, bottom)
+    pub fn crop(&mut self, rect: CropRect) -> Result<()> {
+        edit::add_effect_crop(self.raw, rect)
     }
 
     /// Resize the input images before encoding.
-    pub fn resize(&mut self, width: i32, height: i32) -> Result<()> {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
         edit::add_effect_resize(self.raw, width, height)
     }
 
