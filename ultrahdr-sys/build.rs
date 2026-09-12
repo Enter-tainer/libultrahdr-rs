@@ -46,19 +46,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
 /// static link fails and the shared object fails to load at runtime. Only libraries that are
 /// actually present are emitted, so this is a no-op on systems whose libheif has no such codecs.
 fn libheif_codec_link_flags() -> Vec<String> {
-    // (pkg-config package name, library name)
-    const CODECS: [(&str, &str); 7] = [
-        ("x265", "x265"),
-        ("aom", "aom"),
-        ("dav1d", "dav1d"),
-        ("libde265", "de265"),
-        ("rav1e", "rav1e"),
-        ("SvtAv1Enc", "SvtAv1Enc"),
-        ("vvenc", "vvenc"),
-    ];
-
     let mut flags: Vec<String> = Vec::new();
-    for (package, lib_name) in CODECS {
+    for (package, lib_name, _) in HEIF_CODECS.iter().copied() {
         let candidate = match Command::new("pkg-config")
             .args(["--libs", package])
             .output()
@@ -109,9 +98,58 @@ fn run_command(cmd: &mut Command) {
 /// libaom release cross-compiled for wasm, pinned so the codec build is reproducible.
 const WASM_AOM_VERSION: &str = "v3.15.0";
 
-/// Whether this compilation cross-compiles and links the wasm AV1 codec.
-fn wasm_avif_enabled(target: &str) -> bool {
-    is_wasm_target(target) && cfg!(feature = "heif") && cfg!(feature = "wasm-avif")
+/// Whether this compilation cross-compiles libaom for the target.
+///
+/// A wasm `heif` build always needs it: libheif provides the container plumbing only, and a host
+/// codec cannot be linked into a wasm module.
+fn wasm_libaom_needed(target: &str) -> bool {
+    is_wasm_target(target) && cfg!(feature = "heif")
+}
+
+/// Codec libraries libheif picks up for the HEIF/AVIF containers:
+/// `(pkg-config package, library name, label)`.
+const HEIF_CODECS: &[(&str, &str, &str)] = &[
+    ("x265", "x265", "x265 (HEVC: HEIC encode)"),
+    ("aom", "aom", "libaom (AV1: AVIF encode + decode)"),
+    ("dav1d", "dav1d", "dav1d (AV1: AVIF decode)"),
+    ("libde265", "de265", "libde265 (HEVC: HEIC decode)"),
+    ("rav1e", "rav1e", "rav1e (AV1 encode)"),
+    ("SvtAv1Enc", "SvtAv1Enc", "SVT-AV1 (AV1 encode)"),
+    ("vvenc", "vvenc", "vvenc (VVC encode)"),
+];
+
+/// Whether `pkg-config` knows a library, i.e. whether libheif's CMake probe will find it here.
+///
+/// Follows the `pkg-config` crate's conventions: `PKG_CONFIG` selects the executable, and
+/// `PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR` extend the search. A `libheif` build that ends up with
+/// zero codecs can only parse containers, so this is also the check the `heif` feature relies on.
+fn pkg_config_has(package: &str) -> bool {
+    let opt_out = format!("{}_NO_PKG_CONFIG", package.to_uppercase().replace('-', "_"));
+    println!("cargo:rerun-if-env-changed={opt_out}");
+    if env::var(&opt_out).is_ok_and(|value| value != "0") {
+        return false;
+    }
+    let pkg_config = env::var_os("PKG_CONFIG").unwrap_or_else(|| "pkg-config".into());
+    Command::new(pkg_config)
+        .arg("--exists")
+        .arg(package)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Whether a codec is available for libheif on this host: pkg-config knows it, or at least the
+/// library file is installed (which libheif's `find_package` accepts too).
+fn heif_codec_available(package: &str, lib_name: &str) -> bool {
+    pkg_config_has(package) || library_present(lib_name)
+}
+
+/// Fail the build with an actionable message.
+///
+/// `cargo::error` (Cargo >= 1.84, and this workspace needs 1.85 for edition 2024) renders the
+/// message as the build error instead of an opaque panic backtrace.
+fn build_error(message: &str) -> ! {
+    println!("cargo::error={message}");
+    std::process::exit(1);
 }
 
 /// Cross-compile libaom for wasm32-wasip1 and return a prefix that libheif's `find_package(AOM)`
@@ -357,8 +395,8 @@ const LIBHEIF_HOST_CODECS: [&str; 18] = [
 ///
 /// Beyond being the wrong architecture, the host include directories (`/usr/include` on a typical
 /// Linux host) leak into the cross compile and break it (`gnu/stubs-32.h` not found). `keep_aom`
-/// is set by the `wasm-avif` feature, which cross-compiles libaom into a prefix libheif can find,
-/// so the AOM entries stay enabled in that case. Native builds never read this hunk.
+/// is set when the `heif` feature cross-compiles libaom into a prefix libheif can find, so the
+/// AOM entries stay enabled in that case. Native builds never read this hunk.
 fn libheif_wasi_codec_guard(keep_aom: bool) -> String {
     let mut added = vec![
         "# UltraHDR: when cross-compiling for WASI, never probe the build host for codec"
@@ -499,7 +537,7 @@ index 04e81fe2..92be5bb9 100644
         use std::io::Write;
         let _ = f.write_all(MKSTEMP_FIX.as_bytes());
         let guard =
-            libheif_wasi_codec_guard(wasm_avif_enabled(&env::var("TARGET").unwrap_or_default()));
+            libheif_wasi_codec_guard(wasm_libaom_needed(&env::var("TARGET").unwrap_or_default()));
         let _ = f.write_all(guard.as_bytes());
     }
 }
@@ -610,16 +648,14 @@ fn main() {
     let is_wasm = is_wasm_target(&target);
     let wasi = wasi_toolchain();
 
-    // `wasm-avif` cross-compiles libaom for the target and points the nested libheif configure at
-    // it, because the WASI guard added above disables every host codec.
+    // A wasm `heif` build cross-compiles libaom and points the nested libheif configure at it,
+    // because the WASI guard added above disables every host codec. HEVC has no WASI port, so the
+    // build provides AVIF only - say so rather than quietly shipping a codec-less libheif.
     println!("cargo:rerun-if-env-changed=ULTRAHDR_AOM_SRC");
-    let wasm_aom = if cfg!(feature = "wasm-avif") && !cfg!(feature = "heif") {
-        println!("cargo:warning=the `wasm-avif` feature only has an effect together with `heif`");
-        None
-    } else if wasm_avif_enabled(&target) {
+    let wasm_aom = if wasm_libaom_needed(&target) {
         let (_, wasi_prefix) = wasi
             .as_ref()
-            .expect("wasm-avif needs a wasi-sdk toolchain; set WASI_SDK_PREFIX");
+            .expect("a wasm `heif` build needs a wasi-sdk toolchain; set WASI_SDK_PREFIX");
         let prefix = build_wasm_libaom(&out_dir, wasi_prefix);
         let pc_dir = prefix.join("lib/pkgconfig");
         // SAFETY: removing/adding process env vars is safe here; the build script does not spawn
@@ -631,10 +667,53 @@ fn main() {
             env::set_var("PKG_CONFIG_LIBDIR", &pc_dir);
             env::set_var("PKG_CONFIG_PATH", &pc_dir);
         }
+        println!(
+            "cargo:warning=`heif` on wasm32-wasip1 provides AVIF only: libaom (AV1) is \
+             cross-compiled, while HEVC (x265/libde265) has no WASI port. `--format heif` and \
+             `Codec::Heif` fail at runtime."
+        );
         Some(prefix)
     } else {
         None
     };
+
+    // On native targets libheif probes the host for codecs. A build that finds none is useless (it
+    // can only parse containers), which is what silently happens when the codec dev packages are
+    // missing, so report the codec set and fail when it is empty. Cross builds keep delegating to
+    // the CMake probe, and docs.rs has no codecs and only renders documentation.
+    for var in [
+        "PKG_CONFIG",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_LIBDIR",
+        "PKG_CONFIG_ALLOW_CROSS",
+        "DOCS_RS",
+    ] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
+    if cfg!(feature = "heif") && !is_wasm && env::var_os("DOCS_RS").is_none() {
+        if env::var("HOST").ok() == env::var("TARGET").ok() {
+            let found: Vec<&str> = HEIF_CODECS
+                .iter()
+                .filter(|(package, lib_name, _)| heif_codec_available(package, lib_name))
+                .map(|(_, _, label)| *label)
+                .collect();
+            if found.is_empty() {
+                build_error(
+                    "the `heif` feature needs at least one codec library, but none of libaom, \
+                     x265, libde265, dav1d, rav1e, SVT-AV1 or vvenc was found. Install one \
+                     (`libaom-dev` for AVIF, `libx265-dev` + `libde265-dev` for HEIC) or point \
+                     PKG_CONFIG_PATH (and CMAKE_PREFIX_PATH) at the prefix that provides it.",
+                );
+            }
+            println!("cargo:warning=heif codecs: {}", found.join(", "));
+        } else {
+            println!(
+                "cargo:warning=`heif` is cross-compiling: codec discovery is left to the libheif \
+                 CMake probe. Set PKG_CONFIG_ALLOW_CROSS=1, PKG_CONFIG_PATH and \
+                 CMAKE_PREFIX_PATH to point it at the target's codec libraries."
+            );
+        }
+    }
 
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release");
@@ -840,8 +919,8 @@ fn main() {
             println!("cargo:rustc-link-lib=heif");
         }
         if is_wasm {
-            // Without `wasm-avif` the artifact keeps libheif container support only, i.e. no
-            // HEIF/AVIF codecs at runtime.
+            // A wasm `heif` build always links the cross-compiled libaom (AV1); without it the
+            // artifact would keep libheif container support only, i.e. no codecs at runtime.
             if let Some(prefix) = &wasm_aom {
                 println!(
                     "cargo:rustc-link-search=native={}",

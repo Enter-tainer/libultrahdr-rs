@@ -9,7 +9,7 @@ pub enum OutputFormat {
     /// JPEG UltraHDR; always available.
     Jpeg,
     /// AVIF (AV1); needs the `heif` feature plus libaom, either from the host or
-    /// cross-compiled with the `wasm-avif` feature.
+    /// cross-compiled for wasm by the `heif` feature.
     Avif,
     /// HEIF/HEIC (HEVC); needs the `heif` feature and a host HEVC encoder (x265).
     Heif,

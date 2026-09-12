@@ -36,7 +36,10 @@ jobs:
             nasm \
             pkg-config \
             libegl1-mesa-dev \
-            libgles2-mesa-dev
+            libgles2-mesa-dev \
+            libaom-dev \
+            libx265-dev \
+            libde265-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -150,9 +153,11 @@ jobs:
           echo "wasm artifact size: $(stat -c%s target/wasm32-wasip1/release/ultrahdr-bake.wasm) bytes"
 
       - name: Build wasm with heif feature
-        # Compiles libheif for wasm32-wasip1, which requires the libheif wasm
-        # patches (see ultrahdr-sys/build.rs). Catches heif-wasm build regressions
-        # that the default-feature build above does not exercise.
+        # Compiles libheif + a cross-compiled libaom for wasm32-wasip1, which
+        # requires the libheif wasm patches (see ultrahdr-sys/build.rs). Catches
+        # heif-wasm build regressions that the default-feature build above does
+        # not exercise. HEVC has no WASI port, so this configuration is AVIF-only
+        # and build.rs warns about it.
         run: cargo build -p ultrahdr-bake --features heif --release --locked --target wasm32-wasip1
 
       - name: Upload wasm artifact

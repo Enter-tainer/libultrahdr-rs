@@ -25,7 +25,6 @@ smpte2094-50 = ["ultrahdr/smpte2094-50"]
 iso21496 = ["ultrahdr/iso21496"]
 no-threads = ["ultrahdr/no-threads"]
 jpeg-max-dimension = ["ultrahdr/jpeg-max-dimension"]
-wasm-avif = ["ultrahdr/wasm-avif"]
 
 [dependencies]
 ultrahdr = { workspace = true }

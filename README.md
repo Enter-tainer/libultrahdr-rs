@@ -41,7 +41,7 @@ target/release/ultrahdr-bake \
 # Or let the tool auto-detect which JPEG is HDR vs SDR
 target/release/ultrahdr-bake photo1.jpg photo2.jpg
 
-# Write AVIF/HEIF instead of JPEG (needs the `heif` feature; on wasm AVIF needs `wasm-avif`)
+# Write AVIF/HEIF instead of JPEG (needs the `heif` feature)
 cargo build -p ultrahdr-bake --release --features heif
 target/release/ultrahdr-bake --hdr hdr_gainmap.jpg --sdr base_sdr.jpg --format avif --out out.avif
 
@@ -131,8 +131,7 @@ instead of the C constants; `ultrahdr::sys` re-exports the raw bindings for anyt
 - `vendored` (default): build libjpeg-turbo and other deps from source. / `vendored`（默认）：从源码构建 libjpeg-turbo 等依赖。
 - `shared`: link dynamically against `libuhdr`. / `shared`：动态链接 `libuhdr`。
 - `gles`: enable EGL/GLES support in upstream CMake. / `gles`：在上游启用 EGL/GLES 支持。
-- `heif`: HEIF/HEIC and AVIF containers via libheif (needs network at build time, or a system libheif with the ISO 21496-1 API). / `heif`：通过 libheif 支持 HEIF/AVIF 容器（构建时需要网络，或系统 libheif 支持 ISO 21496-1）。
-- `wasm-avif`: together with `heif` on `wasm32-wasip1`, cross-compile libaom (AV1) and link it, so the wasm module can encode and decode AVIF at runtime (default wasm builds stay small; HEVC remains host-only). / `wasm-avif`：在 `wasm32-wasip1` 上配合 `heif` 交叉编译并链接 libaom（AV1），使 wasm 模块可以真正编解码 AVIF；默认 wasm 构建不受影响，HEVC 仍仅限宿主。
+- `heif`: HEIF/HEIC and AVIF containers via libheif (one upstream switch covers both; needs network at build time, or a system libheif with the ISO 21496-1 API). libheif only supplies the container plumbing, so the codec set is provisioned per target and reported as a build warning: native builds use the host's codec libraries and fail to build if none of them is present, while `wasm32-wasip1` cross-compiles libaom (AVIF works, HEVC has no WASI port). / `heif`：通过 libheif 支持 HEIF/HEIC 与 AVIF 容器（上游只有一个开关同时覆盖两者）。libheif 只提供容器能力，codec 按目标平台供给并以构建警告列出：宿主构建使用系统的 codec 库、一个都没有时直接构建失败；`wasm32-wasip1` 则交叉编译 libaom（AVIF 可用，HEVC 没有 WASI 移植）。
 - `iso21496` (default): emit ISO/TS 21496-1 gain map metadata. / `iso21496`（默认）：写入 ISO/TS 21496-1 增益图元数据。
 - `xmp` (default): also write XMP (`GContainer` + `hdrgm`) gain map metadata for older readers. / `xmp`（默认）：同时写入 XMP 元数据，兼容旧版读取器。
 - `smpte2094-50`: SMPTE ST 2094-50 dynamic metadata (AGTM). / `smpte2094-50`：SMPTE ST 2094-50 动态元数据（AGTM）。

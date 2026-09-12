@@ -23,6 +23,17 @@ pub fn run_encoding(
         );
     }
 
+    // A wasm build bundles the AV1 codec only (HEVC has no WASI port), so there is no HEVC encoder
+    // to write a HEIC/HEIF container with. Fail with the reason instead of letting libheif report
+    // its opaque "Unsupported file-type".
+    #[cfg(target_arch = "wasm32")]
+    if args.format == crate::cli::OutputFormat::Heif {
+        anyhow::bail!(
+            "--format heif needs an HEVC encoder, and wasm builds bundle the AV1 codec only \
+             (x265/libde265 have no WASI port); use --format avif or --format jpeg"
+        );
+    }
+
     let hdr_bytes = fs::read(&inputs.hdr)
         .with_context(|| format!("Failed to read HDR UltraHDR file {}", inputs.hdr.display()))?;
     let sdr_bytes = fs::read(&inputs.sdr)

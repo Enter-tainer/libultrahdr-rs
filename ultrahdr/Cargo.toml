@@ -26,7 +26,6 @@ iso21496 = ["ultrahdr-sys/iso21496"]
 xmp = ["ultrahdr-sys/xmp"]
 no-threads = ["ultrahdr-sys/no-threads"]
 jpeg-max-dimension = ["ultrahdr-sys/jpeg-max-dimension"]
-wasm-avif = ["ultrahdr-sys/wasm-avif"]
 
 [dependencies]
 ultrahdr-sys = { workspace = true }
